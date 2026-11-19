@@ -8,12 +8,15 @@ import {
   GamePhase,
   HudSnapshot,
   LEVEL_LENGTH,
+  ShaderStyleMode,
 } from './types';
 import { LevelBuilder } from './LevelBuilder';
 import { InputState, PlayerController } from './PlayerController';
 import { EnemyManager } from './EnemyManager';
 import { ProceduralAudio, VfxManager } from './VfxAudio';
+import { PostProcessingPass } from './PostProcessingPass';
 
+const SHADER_MODE_ORDER: ShaderStyleMode[] = ['hd2d', 'retro16', 'grade', 'off'];
 const HIGH_SCORE_KEY = 'aetherblade_25d_highscore_v1';
 
 function boxesOverlap(a: AABB, b: AABB): boolean {
@@ -61,6 +64,7 @@ export class GameEngine {
   private enemies: EnemyManager;
   private vfx: VfxManager;
   private audio: ProceduralAudio;
+  private postPass: PostProcessingPass;
 
   // Simulation state
   private phase: GamePhase = 'title';
@@ -188,6 +192,9 @@ export class GameEngine {
     this.enemies = new EnemyManager(this.scene, pal);
     this.enemies.spawnStageWave();
 
+    // Full-scene post-processing pass: biome color grading + 4x4 Bayer dither & color quantization
+    this.postPass = new PostProcessingPass(this.renderer, width, height, this.biome);
+
     // Debug F2 hitbox group
     this.debugGroup = new THREE.Group();
     this.debugGroup.visible = false;
@@ -251,6 +258,7 @@ export class GameEngine {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.postPass.resize(width, height, this.renderer.getPixelRatio());
   };
 
   private handleBlur = (): void => {
@@ -266,6 +274,12 @@ export class GameEngine {
     if (code === 'F2') {
       e.preventDefault();
       this.toggleDebugHitboxes();
+      return;
+    }
+
+    if (code === 'F3') {
+      e.preventDefault();
+      this.cycleShaderMode();
       return;
     }
 
@@ -363,6 +377,7 @@ export class GameEngine {
     this.scene.add(this.level.root);
 
     this.vfx.configureBiomeParticles(pal, this.camX);
+    this.postPass.setBiome(biomeId);
 
     // Preserve decoded enemy sprite atlases while updating biome palette
     this.enemies.setPalette(pal);
@@ -429,6 +444,13 @@ export class GameEngine {
   public toggleDebugHitboxes(): void {
     this.debugEnabled = !this.debugEnabled;
     this.debugGroup.visible = this.debugEnabled;
+    this.emitHud();
+  }
+
+  public cycleShaderMode(): void {
+    const idx = SHADER_MODE_ORDER.indexOf(this.postPass.mode);
+    const next = SHADER_MODE_ORDER[(idx + 1) % SHADER_MODE_ORDER.length];
+    this.postPass.setMode(next);
     this.emitHud();
   }
 
@@ -499,7 +521,8 @@ export class GameEngine {
       this.vfx.update(dt * 0.35, this.camX, this.elapsed);
     }
 
-    this.renderer.render(this.scene, this.camera);
+    this.postPass.update(dt);
+    this.postPass.render(this.renderer, this.scene, this.camera);
 
     // Throttle React HUD updates to ~20Hz while keeping canvas at full 60fps
     this.hudEmitAccum += dt;
@@ -649,6 +672,12 @@ export class GameEngine {
 
           this.hitStopTimer = heavy || defeated ? 0.068 : 0.04;
           this.addShake(heavy || defeated ? 0.34 : 0.14);
+          if (heavy || defeated) {
+            this.postPass.triggerFlash(
+              enemy.type === 'boss' ? 0xfbbf24 : 0x38bdf8,
+              enemy.type === 'boss' ? 0.34 : 0.16,
+            );
+          }
           this.saveHighScoreIfNeeded();
         }
       }
@@ -699,12 +728,14 @@ export class GameEngine {
           this.score += 120;
           this.hitStopTimer = 0.075;
           this.addShake(0.32);
+          this.postPass.triggerFlash(0x38bdf8, 0.34);
           this.saveHighScoreIfNeeded();
         } else if (res === 'hit') {
           this.combo = 0;
           this.comboTimer = 0;
           this.hitStopTimer = heavy ? 0.06 : 0.035;
           this.addShake(heavy ? 0.42 : 0.26);
+          this.postPass.triggerFlash(0xf43f5e, heavy ? 0.26 : 0.16);
         } else if (res === 'guarded') {
           this.addShake(0.14);
         }
@@ -857,6 +888,7 @@ export class GameEngine {
       parriesCount: this.parriesCount,
       muted: this.audio.muted,
       debugHitboxes: this.debugEnabled,
+      shaderMode: this.postPass.mode,
       boss: {
         active: this.enemies.bossTriggered && !!bossEntity && bossEntity.alive,
         name: pal.bossName,
@@ -881,6 +913,7 @@ export class GameEngine {
     this.enemies.dispose();
     this.vfx.dispose();
     this.audio.dispose();
+    this.postPass.dispose();
 
     this.debugBoxGeo.dispose();
     this.debugMatPlayer.dispose();

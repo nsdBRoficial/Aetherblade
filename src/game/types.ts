@@ -8,6 +8,8 @@ export type BiomeId =
 
 export type GamePhase = 'title' | 'playing' | 'paused' | 'gameover' | 'victory';
 
+export type ShaderStyleMode = 'hd2d' | 'retro16' | 'grade' | 'off';
+
 export type HeroAnimState =
   | 'IDLE'
   | 'RUN'
@@ -116,6 +118,7 @@ export interface HudSnapshot {
   parriesCount: number;
   muted: boolean;
   debugHitboxes: boolean;
+  shaderMode: ShaderStyleMode;
   boss: BossHudState;
   floatingTexts: FloatingDamageText[];
   spriteSource: 'attached' | 'custom' | 'procedural';

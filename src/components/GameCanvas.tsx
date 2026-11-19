@@ -22,6 +22,7 @@ const INITIAL_HUD: HudSnapshot = {
   parriesCount: 0,
   muted: false,
   debugHitboxes: false,
+  shaderMode: 'hd2d',
   boss: {
     active: false,
     name: BIOME_PALETTES['deep-forest'].bossName,
@@ -91,6 +92,10 @@ export const GameCanvas: React.FC = () => {
     engineRef.current?.toggleDebugHitboxes();
   }, []);
 
+  const handleCycleShaderMode = useCallback(() => {
+    engineRef.current?.cycleShaderMode();
+  }, []);
+
   const handleUploadSprite = useCallback((file: File) => {
     engineRef.current?.loadCustomSpritesheet(file, 9, 4);
   }, []);
@@ -120,6 +125,7 @@ export const GameCanvas: React.FC = () => {
         onSelectBiome={handleSelectBiome}
         onToggleMute={handleToggleMute}
         onToggleDebug={handleToggleDebug}
+        onCycleShaderMode={handleCycleShaderMode}
         onUploadSprite={handleUploadSprite}
       />
     </div>

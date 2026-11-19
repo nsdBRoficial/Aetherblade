@@ -12,8 +12,9 @@ import {
   Volume2,
   VolumeX,
   Box,
+  Palette,
 } from 'lucide-react';
-import { BIOME_PALETTES, BiomeId, HudSnapshot } from '../game/types';
+import { BIOME_PALETTES, BiomeId, HudSnapshot, ShaderStyleMode } from '../game/types';
 
 interface GameHUDProps {
   hud: HudSnapshot;
@@ -24,8 +25,16 @@ interface GameHUDProps {
   onSelectBiome: (biome: BiomeId) => void;
   onToggleMute: () => void;
   onToggleDebug: () => void;
+  onCycleShaderMode: () => void;
   onUploadSprite: (file: File) => void;
 }
+
+const SHADER_MODE_LABELS: Record<ShaderStyleMode, string> = {
+  hd2d: 'HD-2D Dither',
+  retro16: '16-Bit Pixel',
+  grade: 'Color Grade',
+  off: 'Filter Off',
+};
 
 const BIOME_ORDER: BiomeId[] = [
   'deep-forest',
@@ -45,6 +54,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onSelectBiome,
   onToggleMute,
   onToggleDebug,
+  onCycleShaderMode,
   onUploadSprite,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -193,9 +203,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-white/12 bg-[#090d16]/86 p-1.5 shadow-lg">
                   <button
                     type="button"
+                    onClick={onCycleShaderMode}
+                    title={`Visual Filter: ${SHADER_MODE_LABELS[hud.shaderMode]} (F3)`}
+                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
+                      hud.shaderMode !== 'off'
+                        ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/45 hover:bg-sky-500/30'
+                        : 'text-slate-400 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    <Palette className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={onToggleDebug}
                     title="Toggle Hitbox Debug (F2)"
-                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors ${
+                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
                       hud.debugHitboxes
                         ? 'bg-emerald-500/25 text-emerald-300 ring-1 ring-emerald-400/50'
                         : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -260,6 +282,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               <span className="text-amber-300">Yellow: Enemy</span>
               <span className="text-sky-400">Blue: Platform</span>
               <span className="text-slate-400">·</span>
+              <span className="text-sky-300">F3: {SHADER_MODE_LABELS[hud.shaderMode]}</span>
+              <span className="text-slate-400">·</span>
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -306,7 +330,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           {/* DISCREET BOTTOM CONTROLS HINT (hidden when Boss Bar or Debug active) */}
           {!hud.boss.active && !hud.debugHitboxes && hud.phase === 'playing' && (
             <div className="fixed bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-white/10 bg-[#090d16]/76 px-4 py-1.5 text-[11px] text-slate-300 whitespace-nowrap">
-              A/D Move · Space Jump (x2) · J / Click Attack · K / Right-Click Guard & Parry · Shift Dash · F2 Debug
+              A/D Move · Space Jump (x2) · J / Click Attack · K / Right-Click Guard &amp; Parry · Shift Dash · F2 Debug · F3 {SHADER_MODE_LABELS[hud.shaderMode]}
             </div>
           )}
         </>
@@ -326,14 +350,25 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 <span>Side-Scrolling 2.5D Action</span>
               )}
             </div>
-            <button
-              type="button"
-              onClick={onToggleMute}
-              title={hud.muted ? 'Unmute Audio' : 'Mute Audio'}
-              className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/15 bg-[#090d16]/80 text-slate-200 transition-colors hover:bg-white/15"
-            >
-              {hud.muted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onCycleShaderMode}
+                title="Cycle Color-Grading & Pixel Dither Filter (F3)"
+                className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/15 bg-[#090d16]/80 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/15 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Palette className="h-4 w-4 text-sky-300" />
+                {SHADER_MODE_LABELS[hud.shaderMode]}
+              </button>
+              <button
+                type="button"
+                onClick={onToggleMute}
+                title={hud.muted ? 'Unmute Audio' : 'Mute Audio'}
+                className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/15 bg-[#090d16]/80 text-slate-200 transition-colors hover:bg-white/15 cursor-pointer"
+              >
+                {hud.muted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
+              </button>
+            </div>
           </div>
 
           {/* Center Title Crest & Primary CTA */}
@@ -419,7 +454,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* Single flat control-hint line */}
           <div className="text-center text-xs text-slate-300/90">
-            A/D Move · Space Jump (x2) · J / Left-Click 3-Hit Combo · K / Right-Click Guard &amp; Parry · Shift Dash · F2 Debug
+            A/D Move · Space Jump (x2) · J / Left-Click 3-Hit Combo · K / Right-Click Guard &amp; Parry · Shift Dash · F2 Debug · F3 Filter
           </div>
         </div>
       )}
