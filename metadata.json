@@ -1,0 +1,8 @@
+{
+  "name": "Aetherblade 2.5D — Hack'n'Slash",
+  "description": "Side-scrolling 2.5D Hack'n'Slash action game in Three.js with 5-layer real Z-depth parallax, 4-row sprite animation, 3-hit combos, Perfect Parry, destructible props, 6 biomes, and a multi-phase final boss.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

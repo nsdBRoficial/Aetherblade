@@ -1,0 +1,129 @@
+'use client';
+
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { GameEngine } from '../game/GameEngine';
+import { BIOME_PALETTES, BiomeId, HudSnapshot } from '../game/types';
+import { GameHUD } from './GameHUD';
+
+const INITIAL_HUD: HudSnapshot = {
+  phase: 'title',
+  biome: 'deep-forest',
+  hp: 100,
+  maxHp: 100,
+  stamina: 100,
+  maxStamina: 100,
+  score: 0,
+  highScore: 0,
+  combo: 0,
+  comboTimer: 0,
+  progress: 0,
+  zone: 1,
+  enemiesDefeated: 0,
+  parriesCount: 0,
+  muted: false,
+  debugHitboxes: false,
+  boss: {
+    active: false,
+    name: BIOME_PALETTES['deep-forest'].bossName,
+    title: BIOME_PALETTES['deep-forest'].bossTitle,
+    hp: 440,
+    maxHp: 440,
+    phase: 1,
+  },
+  floatingTexts: [],
+  spriteSource: 'procedural',
+};
+
+export const GameCanvas: React.FC = () => {
+  const mountRef = useRef<HTMLDivElement | null>(null);
+  const engineRef = useRef<GameEngine | null>(null);
+  const [hud, setHud] = useState<HudSnapshot>(INITIAL_HUD);
+  const [webglError, setWebglError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !mountRef.current) return;
+
+    let engine: GameEngine | null = null;
+    try {
+      engine = new GameEngine(mountRef.current, (snapshot) => {
+        setHud(snapshot);
+      });
+      engineRef.current = engine;
+    } catch (err) {
+      setWebglError(
+        err instanceof Error ? err.message : 'Unable to initialize 3D WebGL renderer.',
+      );
+    }
+
+    return () => {
+      if (engine) {
+        engine.dispose();
+        engineRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleStart = useCallback(() => {
+    engineRef.current?.startGame();
+  }, []);
+
+  const handleResume = useCallback(() => {
+    engineRef.current?.setPhase('playing');
+  }, []);
+
+  const handlePause = useCallback(() => {
+    engineRef.current?.setPhase('paused');
+  }, []);
+
+  const handleReturnTitle = useCallback(() => {
+    engineRef.current?.setPhase('title');
+  }, []);
+
+  const handleSelectBiome = useCallback((biome: BiomeId) => {
+    engineRef.current?.selectBiome(biome);
+  }, []);
+
+  const handleToggleMute = useCallback(() => {
+    engineRef.current?.toggleMute();
+  }, []);
+
+  const handleToggleDebug = useCallback(() => {
+    engineRef.current?.toggleDebugHitboxes();
+  }, []);
+
+  const handleUploadSprite = useCallback((file: File) => {
+    engineRef.current?.loadCustomSpritesheet(file, 9, 4);
+  }, []);
+
+  return (
+    <div className="relative h-screen w-screen overflow-hidden bg-[#080b12]">
+      {/* Isolated WebGL mount container so HUD updates never remount the canvas */}
+      <div ref={mountRef} className="h-full w-full" />
+
+      {webglError && (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-[#080b12] p-6 text-center">
+          <div className="max-w-md rounded-xl border border-white/15 bg-slate-900 p-6">
+            <h2 className="font-display mb-2 text-xl font-bold text-white">
+              WebGL Renderer Unavailable
+            </h2>
+            <p className="text-sm text-slate-300">{webglError}</p>
+          </div>
+        </div>
+      )}
+
+      <GameHUD
+        hud={hud}
+        onStart={handleStart}
+        onResume={handleResume}
+        onPause={handlePause}
+        onReturnTitle={handleReturnTitle}
+        onSelectBiome={handleSelectBiome}
+        onToggleMute={handleToggleMute}
+        onToggleDebug={handleToggleDebug}
+        onUploadSprite={handleUploadSprite}
+      />
+    </div>
+  );
+};
+
+export default GameCanvas;
