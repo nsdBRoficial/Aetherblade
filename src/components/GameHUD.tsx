@@ -2,10 +2,11 @@
 
 import React, { useRef } from 'react';
 import {
+  ArrowRight,
+  Check,
   Pause,
   Play,
   RotateCcw,
-  Shield,
   Skull,
   Swords,
   Upload,
@@ -14,7 +15,19 @@ import {
   Box,
   Palette,
 } from 'lucide-react';
-import { BIOME_PALETTES, BiomeId, HudSnapshot, ShaderStyleMode } from '../game/types';
+import {
+  BIOME_ORDER,
+  BIOME_PALETTES,
+  BiomeId,
+  DIFFICULTY_ORDER,
+  DIFFICULTY_PRESETS,
+  DifficultyId,
+  HudSnapshot,
+  ShaderStyleMode,
+} from '../game/types';
+import { BIOME_ROSTERS } from '../game/BiomeRoster';
+import { ComboCounter } from './ComboCounter';
+import { OffscreenEnemyIndicators } from './OffscreenEnemyIndicators';
 
 interface GameHUDProps {
   hud: HudSnapshot;
@@ -23,6 +36,8 @@ interface GameHUDProps {
   onPause: () => void;
   onReturnTitle: () => void;
   onSelectBiome: (biome: BiomeId) => void;
+  onSelectDifficulty: (difficulty: DifficultyId) => void;
+  onAdvanceNextArea: (targetBiome?: BiomeId) => void;
   onToggleMute: () => void;
   onToggleDebug: () => void;
   onCycleShaderMode: () => void;
@@ -30,20 +45,11 @@ interface GameHUDProps {
 }
 
 const SHADER_MODE_LABELS: Record<ShaderStyleMode, string> = {
-  hd2d: 'HD-2D Dither',
+  hd2d: 'Hero Unified',
   retro16: '16-Bit Pixel',
-  grade: 'Color Grade',
+  grade: 'Hero Grade',
   off: 'Filter Off',
 };
-
-const BIOME_ORDER: BiomeId[] = [
-  'deep-forest',
-  'green-hills',
-  'hare-canyon',
-  'bamboo-forest',
-  'winter',
-  'wheat-field',
-];
 
 export const GameHUD: React.FC<GameHUDProps> = ({
   hud,
@@ -52,6 +58,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onPause,
   onReturnTitle,
   onSelectBiome,
+  onSelectDifficulty,
+  onAdvanceNextArea,
   onToggleMute,
   onToggleDebug,
   onCycleShaderMode,
@@ -59,9 +67,17 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const palette = BIOME_PALETTES[hud.biome];
+  const roster = BIOME_ROSTERS[hud.biome];
+  const diffConfig = DIFFICULTY_PRESETS[hud.difficulty];
+  const nextPalette = BIOME_PALETTES[hud.transition.toBiome];
+  const currentBiomeIdx = Math.max(0, BIOME_ORDER.indexOf(hud.biome));
+  const isTransitioning = hud.transition.stage !== 'none';
 
   const hpPct = Math.max(0, Math.min(100, (hud.hp / hud.maxHp) * 100));
   const stamPct = Math.max(0, Math.min(100, (hud.stamina / hud.maxStamina) * 100));
+  const activeChargeKind: 'attack' | 'guard' | null =
+    hud.attackCharge > 0.03 ? 'attack' : hud.guardCharge > 0.03 ? 'guard' : null;
+  const activeChargeVal = activeChargeKind === 'attack' ? hud.attackCharge : hud.guardCharge;
   const bossPct =
     hud.boss.maxHp > 0
       ? Math.max(0, Math.min(100, (hud.boss.hp / hud.boss.maxHp) * 100))
@@ -107,18 +123,26 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           );
         })}
 
-      {/* IN-GAME PERIMETER HUD */}
-      {hud.phase !== 'title' && (
+      {/* DIRECTIONAL OFF-SCREEN ENEMY THREAT INDICATORS */}
+      {hud.phase === 'playing' && !hud.boss.introActive && !isTransitioning && (
+        <OffscreenEnemyIndicators indicators={hud.offscreenEnemies} />
+      )}
+
+      {/* IN-GAME PERIMETER HUD (hidden briefly during Boss Intro & Victory/Area Transitions) */}
+      {hud.phase !== 'title' && !hud.boss.introActive && !isTransitioning && (
         <>
           <div className="flex items-start justify-between gap-4 px-5 pt-4">
-            {/* Top-Left: Vitality & Stamina Cluster */}
-            <div className="w-[260px] rounded-lg border border-white/12 bg-[#090d16]/86 px-3.5 py-2.5 shadow-lg">
+            {/* Top-Left: Vitality, Stamina & Concentrated Magic Charge Cluster */}
+            <div className="w-[264px] rounded-lg border border-white/12 bg-[#090d16]/86 px-3.5 py-2.5 shadow-lg">
               <div className="mb-1.5 flex items-center justify-between text-xs text-slate-300">
                 <span className="font-semibold tracking-wide text-slate-100">
                   {palette.name}
                 </span>
                 <span className="font-mono-num text-slate-400">
-                  Zone {hud.zone} / 4
+                  Zone {hud.zone}/4 ·{' '}
+                  <span style={{ color: diffConfig.accent }} className="font-semibold">
+                    {diffConfig.name}
+                  </span>
                 </span>
               </div>
 
@@ -151,6 +175,46 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   />
                 </div>
               </div>
+
+              {/* Concentrated Magic Charge Meter (visible only while channeling M1 or M2) */}
+              {activeChargeKind && (
+                <div className="mt-2 border-t border-white/10 pt-1.5">
+                  <div className="mb-0.5 flex items-center justify-between text-[10px]">
+                    <span
+                      className={`font-semibold tracking-wide ${
+                        activeChargeVal >= 0.95
+                          ? 'text-amber-300'
+                          : activeChargeKind === 'attack'
+                            ? 'text-cyan-300'
+                            : 'text-fuchsia-300'
+                      }`}
+                    >
+                      {activeChargeKind === 'attack'
+                        ? activeChargeVal >= 0.95
+                          ? 'SUPERNOVA WAVE READY!'
+                          : 'Charging Aether Wave'
+                        : activeChargeVal >= 0.95
+                          ? 'AEGIS SUPERNOVA READY!'
+                          : 'Charging Aegis Nova'}
+                    </span>
+                    <span className="font-mono-num font-bold text-slate-200">
+                      {Math.round(activeChargeVal * 100)}%
+                    </span>
+                  </div>
+                  <div className="h-1.5 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-white/15">
+                    <div
+                      className={`h-full origin-left ${
+                        activeChargeVal >= 0.95
+                          ? 'bg-gradient-to-r from-amber-400 via-yellow-300 to-white'
+                          : activeChargeKind === 'attack'
+                            ? 'bg-gradient-to-r from-sky-500 via-cyan-300 to-amber-200'
+                            : 'bg-gradient-to-r from-purple-600 via-fuchsia-400 to-amber-200'
+                      }`}
+                      style={{ transform: `scaleX(${Math.max(0, Math.min(1, activeChargeVal))})` }}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Top-Center: Stage Progress Map Bar (X = 0..180 -> Boss) */}
@@ -252,23 +316,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 </div>
               </div>
 
-              {/* Active Combo Meter */}
-              {hud.combo > 1 && (
-                <div className="rounded-lg border border-amber-400/35 bg-[#090d16]/88 px-3.5 py-1.5 text-right shadow-lg">
-                  <div className="flex items-baseline justify-end gap-1.5">
-                    <span className="font-mono-num text-xl font-extrabold text-amber-300">
-                      {hud.combo}x
-                    </span>
-                    <span className="text-xs font-semibold text-amber-100">Combo</span>
-                  </div>
-                  <div className="mt-1 h-1 w-24 overflow-hidden rounded-sm bg-slate-800">
-                    <div
-                      className="h-full bg-amber-400 origin-left"
-                      style={{ transform: `scaleX(${hud.comboTimer})` }}
-                    />
-                  </div>
-                </div>
-              )}
+              {/* Active Visual Combo Counter (scales & pulses with glow as hits chain) */}
+              <ComboCounter
+                combo={hud.combo}
+                comboTimer={hud.comboTimer}
+                comboMultiplier={hud.comboMultiplier}
+                slashStep={hud.slashStep}
+                slashMultiplier={hud.slashMultiplier}
+              />
             </div>
           </div>
 
@@ -297,10 +352,16 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
           {/* BOTTOM BOSS HEALTH BAR */}
           {hud.boss.active && hud.phase === 'playing' && (
-            <div className="fixed bottom-5 left-1/2 w-[min(640px,90vw)] -translate-x-1/2 rounded-lg border border-amber-400/35 bg-[#090d16]/90 px-5 py-3 shadow-2xl">
+            <div
+              className="fixed bottom-5 left-1/2 w-[min(640px,90vw)] -translate-x-1/2 rounded-lg border bg-[#090d16]/92 px-5 py-3 shadow-2xl"
+              style={{ borderColor: `${hud.boss.accent}59` }}
+            >
               <div className="mb-1.5 flex items-baseline justify-between gap-4">
                 <div className="flex items-baseline gap-2.5">
-                  <span className="font-display text-lg font-bold tracking-wider text-amber-200">
+                  <span
+                    className="font-display text-lg font-bold tracking-wider"
+                    style={{ color: hud.boss.accent }}
+                  >
                     {hud.boss.name}
                   </span>
                   <span className="text-xs text-slate-400">{hud.boss.title}</span>
@@ -314,25 +375,142 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   </span>
                 </div>
               </div>
-              <div className="h-3 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-amber-400/25">
+              <div className="h-3 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-white/15">
                 <div
-                  className={`h-full transition-transform duration-150 ease-out origin-left ${
-                    hud.boss.phase === 2
-                      ? 'bg-gradient-to-r from-red-700 via-orange-500 to-amber-300'
-                      : 'bg-gradient-to-r from-rose-800 via-rose-500 to-amber-400'
-                  }`}
-                  style={{ transform: `scaleX(${bossPct / 100})` }}
+                  className="h-full origin-left transition-transform duration-150 ease-out"
+                  style={{
+                    transform: `scaleX(${bossPct / 100})`,
+                    background:
+                      hud.boss.phase === 2
+                        ? `linear-gradient(90deg, #b91c1c, ${hud.boss.accent}, #fef08a)`
+                        : `linear-gradient(90deg, #9f1239, ${hud.boss.accent})`,
+                  }}
                 />
               </div>
             </div>
           )}
 
+          {/* EXECUTION READY PROMPT (appears when 3-Hit Combo completes) */}
+          {hud.phase === 'playing' &&
+            hud.execution.ready &&
+            !hud.execution.active && (
+              <div
+                className={`fixed left-1/2 -translate-x-1/2 w-[min(360px,88vw)] rounded-lg border bg-[#090d16]/92 px-4 py-2.5 shadow-2xl ${
+                  hud.boss.active ? 'bottom-[106px]' : 'bottom-12'
+                }`}
+                style={{
+                  borderColor: `${hud.execution.accent}88`,
+                  boxShadow: `0 0 26px ${hud.execution.accent}33`,
+                }}
+              >
+                <div className="mb-1.5 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="font-mono-num inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-extrabold text-slate-950 shrink-0"
+                      style={{ backgroundColor: hud.execution.accent }}
+                    >
+                      E / Q
+                    </span>
+                    <span className="truncate text-xs font-bold tracking-wide text-white">
+                      {hud.execution.moveName}
+                    </span>
+                  </div>
+                  <span
+                    className="text-[10px] font-semibold tracking-wider uppercase shrink-0"
+                    style={{ color: hud.execution.accent }}
+                  >
+                    Execution Ready
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-white/10">
+                  <div
+                    className="h-full origin-left"
+                    style={{
+                      backgroundColor: hud.execution.accent,
+                      transform: `scaleX(${Math.max(0, Math.min(1, hud.execution.windowTimer))})`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
           {/* DISCREET BOTTOM CONTROLS HINT (hidden when Boss Bar or Debug active) */}
           {!hud.boss.active && !hud.debugHitboxes && hud.phase === 'playing' && (
             <div className="fixed bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-white/10 bg-[#090d16]/76 px-4 py-1.5 text-[11px] text-slate-300 whitespace-nowrap">
-              A/D Move · Space Jump (x2) · J / Click Attack · K / Right-Click Guard &amp; Parry · Shift Dash · F2 Debug · F3 {SHADER_MODE_LABELS[hud.shaderMode]}
+              A/D Move · Space Jump (x2) · M1/J Combo · E/Q Execution (after 3-Hit) · Hold M1/M2 Spells · Shift Dash
             </div>
           )}
+        </>
+      )}
+
+      {/* CINEMATIC SCREEN-WIDE BIOME EXECUTION BANNER (brief 1.16s burst) */}
+      {hud.phase === 'playing' && hud.execution.active && (() => {
+        const p = hud.execution.activeProgress;
+        const opacity = p < 0.14 ? p / 0.14 : p > 0.72 ? Math.max(0, (1 - p) / 0.28) : 1;
+        return (
+          <div style={{ opacity }}>
+            <div className="fixed inset-x-0 top-0 h-11 bg-gradient-to-b from-[#05070c]/95 to-transparent" />
+            <div className="fixed inset-x-0 bottom-0 h-11 bg-gradient-to-t from-[#05070c]/95 to-transparent" />
+            <div className="fixed inset-x-0 top-16 flex flex-col items-center px-6 text-center">
+              <div
+                className="mb-1 text-[11px] font-bold tracking-[0.3em] uppercase"
+                style={{ color: hud.execution.accent }}
+              >
+                Combo Execution · {palette.name}
+              </div>
+              <h2
+                className="font-display text-3xl font-extrabold tracking-[0.16em] text-white uppercase sm:text-4xl"
+                style={{
+                  textShadow: `0 0 28px ${hud.execution.accent}, 0 4px 14px rgba(0,0,0,0.95)`,
+                }}
+              >
+                {hud.execution.moveName}
+              </h2>
+              <div
+                className="my-1.5 h-0.5 w-60"
+                style={{
+                  background: `linear-gradient(90deg, transparent, ${hud.execution.accent}, transparent)`,
+                }}
+              />
+              <div className="text-[11px] font-medium tracking-wider text-slate-200/95">
+                {hud.execution.subtitle}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* CINEMATIC BOSS INTRO LETTERBOX & ENCOUNTER REVEAL (2.35s automated camera pan) */}
+      {hud.phase === 'playing' && hud.boss.introActive && (
+        <>
+          <div className="fixed inset-x-0 top-0 h-14 bg-gradient-to-b from-[#05070c] via-[#05070c]/95 to-transparent" />
+          <div className="fixed inset-x-0 bottom-0 h-16 bg-gradient-to-t from-[#05070c] via-[#05070c]/95 to-transparent" />
+
+          <div className="fixed inset-x-0 bottom-14 flex flex-col items-center text-center px-6">
+            <div
+              className="mb-1 text-[11px] font-semibold tracking-[0.28em] uppercase"
+              style={{ color: hud.boss.accent }}
+            >
+              {palette.name} Boss · Multi-Phase Battle
+            </div>
+            <h2
+              className="font-display text-4xl font-extrabold tracking-[0.18em] text-white uppercase"
+              style={{
+                textShadow: `0 0 26px ${hud.boss.accent}, 0 4px 12px rgba(0,0,0,0.95)`,
+              }}
+            >
+              {hud.boss.name}
+            </h2>
+            <div
+              className="my-2 h-0.5 w-64"
+              style={{
+                background: `linear-gradient(90deg, transparent, ${hud.boss.accent}, transparent)`,
+              }}
+            />
+            <div className="text-xs font-medium tracking-wider text-slate-200/90">
+              {hud.boss.title}
+            </div>
+          </div>
         </>
       )}
 
@@ -423,14 +601,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <button
               type="button"
               onClick={onStart}
-              className="mb-6 inline-flex items-center gap-2.5 rounded-lg bg-sky-500 px-8 py-3.5 text-sm font-bold tracking-wide text-slate-950 shadow-[0_0_28px_rgba(56,189,248,0.4)] transition-transform duration-150 hover:scale-[1.02] hover:bg-sky-400 active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+              className="mb-5 inline-flex items-center gap-2.5 rounded-lg bg-sky-500 px-8 py-3.5 text-sm font-bold tracking-wide text-slate-950 shadow-[0_0_28px_rgba(56,189,248,0.4)] transition-transform duration-150 hover:scale-[1.02] hover:bg-sky-400 active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Swords className="h-4 w-4" />
               Play Stage
             </button>
 
             {/* Biome Selector (Segmented functional buttons — live-previews the 3D biome!) */}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-[#090d16]/86 p-1.5 shadow-xl">
+            <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-[#090d16]/86 p-1.5 shadow-xl">
               {BIOME_ORDER.map((id) => {
                 const b = BIOME_PALETTES[id];
                 const active = hud.biome === id;
@@ -450,11 +628,67 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 );
               })}
             </div>
+
+            {/* Clean unboxed native biome bestiary & Boss preview line */}
+            <div className="mb-3 text-[11px] text-slate-300/95 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
+              <span className="text-slate-400">Foes:</span>{' '}
+              <span className="text-slate-100">{roster.units.grunt.name}</span> ·{' '}
+              <span className="text-slate-100">{roster.units.ranger.name}</span> ·{' '}
+              <span className="text-slate-100">{roster.units.flyer.name}</span> ·{' '}
+              <span className="text-slate-100">{roster.units.brute.name}</span>{' '}
+              <span className="text-slate-500">|</span>{' '}
+              <span className="text-slate-400">Boss:</span>{' '}
+              <span className="font-semibold" style={{ color: roster.boss.accentCss }}>
+                {roster.boss.name}
+              </span>
+            </div>
+
+            {/* Difficulty Select Menu */}
+            <div className="flex flex-col items-center gap-1.5 rounded-xl border border-white/12 bg-[#090d16]/86 px-3 py-2 shadow-xl">
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                <span className="px-1.5 text-[11px] font-medium text-slate-400">
+                  Difficulty
+                </span>
+                {DIFFICULTY_ORDER.map((id) => {
+                  const cfg = DIFFICULTY_PRESETS[id];
+                  const active = hud.difficulty === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onSelectDifficulty(id)}
+                      className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                        active
+                          ? 'text-slate-950 shadow'
+                          : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                      style={active ? { backgroundColor: cfg.accent } : undefined}
+                    >
+                      {cfg.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="font-mono-num text-[11px] text-slate-300">
+                Incoming DMG{' '}
+                <span style={{ color: diffConfig.accent }} className="font-semibold">
+                  {diffConfig.playerDamageMult.toFixed(2)}×
+                </span>{' '}
+                · Aggression{' '}
+                <span style={{ color: diffConfig.accent }} className="font-semibold">
+                  {diffConfig.enemyAggression.toFixed(2)}×
+                </span>{' '}
+                · Score{' '}
+                <span className="font-semibold text-amber-300">
+                  {diffConfig.scoreMult.toFixed(2)}×
+                </span>
+              </div>
+            </div>
           </div>
 
           {/* Single flat control-hint line */}
           <div className="text-center text-xs text-slate-300/90">
-            A/D Move · Space Jump (x2) · J / Left-Click 3-Hit Combo · K / Right-Click Guard &amp; Parry · Shift Dash · F2 Debug · F3 Filter
+            A/D Move · Space Jump (x2) · M1/J Combo · E/Q Execution (after 3-Hit) · Hold M1 Aether Wave · Hold M2 Aegis Nova · Shift Dash
           </div>
         </div>
       )}
@@ -462,13 +696,60 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* PAUSE MODAL */}
       {hud.phase === 'paused' && (
         <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/68 p-4">
-          <div className="w-full max-w-sm rounded-xl border border-white/15 bg-[#0b101b] p-6 text-center shadow-2xl">
+          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#0b101b] p-6 text-center shadow-2xl">
             <h2 className="font-display mb-1 text-2xl font-bold tracking-wide text-white">
               Paused
             </h2>
-            <p className="mb-5 text-xs text-slate-400">
+            <p className="mb-4 text-xs text-slate-400">
               {palette.name} · Zone {hud.zone} of 4
             </p>
+
+            {/* Live Difficulty Select in Pause HUD */}
+            <div className="mb-5 rounded-lg border border-white/10 bg-white/[0.03] p-3">
+              <div className="mb-2 flex items-center justify-between text-[11px]">
+                <span className="font-semibold text-slate-300">Difficulty</span>
+                <span className="text-slate-400">{diffConfig.subtitle}</span>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {DIFFICULTY_ORDER.map((id) => {
+                  const cfg = DIFFICULTY_PRESETS[id];
+                  const active = hud.difficulty === id;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => onSelectDifficulty(id)}
+                      className={`rounded-md py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                        active
+                          ? 'text-slate-950 shadow'
+                          : 'bg-white/6 text-slate-300 hover:bg-white/12 hover:text-white'
+                      }`}
+                      style={active ? { backgroundColor: cfg.accent } : undefined}
+                    >
+                      {cfg.name}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-2 font-mono-num flex items-center justify-between text-[10px] text-slate-300">
+                <span>
+                  Damage Taken{' '}
+                  <strong style={{ color: diffConfig.accent }}>
+                    {diffConfig.playerDamageMult.toFixed(2)}×
+                  </strong>
+                </span>
+                <span>
+                  Aggression{' '}
+                  <strong style={{ color: diffConfig.accent }}>
+                    {diffConfig.enemyAggression.toFixed(2)}×
+                  </strong>
+                </span>
+                <span>
+                  Score{' '}
+                  <strong className="text-amber-300">{diffConfig.scoreMult.toFixed(2)}×</strong>
+                </span>
+              </div>
+            </div>
 
             <div className="flex flex-col gap-2.5">
               <button
@@ -507,33 +788,288 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </div>
       )}
 
-      {/* GAME OVER / STAGE CLEAR MODALS */}
-      {(hud.phase === 'gameover' || hud.phase === 'victory') && (
+      {/* BEAT 1: SLOW-MOTION CAMERA ZOOM-OUT & 'STAGE CLEARED' BANNER */}
+      {hud.phase === 'victory' && hud.transition.stage === 'celebrate' && (
+        <>
+          <div className="fixed inset-x-0 top-0 h-14 bg-gradient-to-b from-[#05070c] via-[#05070c]/95 to-transparent" />
+          <div className="fixed inset-x-0 bottom-0 h-20 bg-gradient-to-t from-[#05070c] via-[#05070c]/95 to-transparent" />
+
+          <div className="fixed inset-x-0 bottom-12 flex flex-col items-center px-6 text-center">
+            <div className="mb-1 text-xs font-medium tracking-[0.22em] text-amber-300/95">
+              Area {hud.transition.areaIndex} of {hud.transition.totalAreas} · Boss Vanquished
+            </div>
+            <h2
+              className="font-display text-4xl font-extrabold tracking-[0.16em] text-amber-100 sm:text-5xl"
+              style={{
+                textShadow:
+                  '0 0 32px rgba(250,204,21,0.75), 0 4px 14px rgba(0,0,0,0.95)',
+              }}
+            >
+              Stage Cleared
+            </h2>
+            <div className="my-2.5 h-0.5 w-72 bg-gradient-to-r from-transparent via-amber-400 to-transparent" />
+            <div className="text-xs font-medium tracking-wide text-slate-200/95">
+              {palette.bossName} has fallen in {palette.name}
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* BEAT 2: STYLIZED 'STAGE CLEARED' END-GAME PERFORMANCE OVERLAY & AREA TRANSITION */}
+      {hud.phase === 'victory' && hud.transition.stage === 'intermission' && (() => {
+        const perf = hud.transition.performance;
+        const mins = perf ? Math.floor(perf.clearTimeSeconds / 60) : 0;
+        const secs = perf ? perf.clearTimeSeconds % 60 : 0;
+        const formattedTime = `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        const rankColor =
+          perf?.rank === 'S'
+            ? 'text-amber-300'
+            : perf?.rank === 'A'
+              ? 'text-sky-300'
+              : perf?.rank === 'B'
+                ? 'text-emerald-300'
+                : 'text-slate-200';
+        const rankBorder =
+          perf?.rank === 'S'
+            ? 'border-amber-300/60 bg-amber-400/12'
+            : perf?.rank === 'A'
+              ? 'border-sky-300/55 bg-sky-400/12'
+              : perf?.rank === 'B'
+                ? 'border-emerald-300/50 bg-emerald-400/10'
+                : 'border-white/20 bg-white/5';
+
+        return (
+          <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-[#060910]/66 p-4">
+            <div className="w-full max-w-2xl rounded-xl border border-amber-300/22 bg-[#0b101b]/95 p-7 text-center shadow-2xl">
+              {/* Stylized 'Stage Cleared' Banner Crest */}
+              <div className="mb-1 text-xs font-medium text-amber-300/90">
+                Area {currentBiomeIdx + 1} of {BIOME_ORDER.length} · {palette.name}
+              </div>
+              <div className="mb-1.5 flex items-center justify-center gap-3">
+                <div className="h-px w-14 bg-gradient-to-r from-transparent to-amber-400/80" />
+                <h2
+                  className="font-display text-3xl font-extrabold tracking-[0.12em] text-amber-200 sm:text-4xl"
+                  style={{
+                    textShadow: '0 0 24px rgba(250,204,21,0.35)',
+                  }}
+                >
+                  {hud.transition.isCampaignComplete ? 'Realm Conquered' : 'Stage Cleared'}
+                </h2>
+                <div className="h-px w-14 bg-gradient-to-l from-transparent to-amber-400/80" />
+              </div>
+              <p className="mb-5 text-xs text-slate-300">
+                {palette.bossName} vanquished · Vitality and Stamina restored for {nextPalette.name}
+              </p>
+
+              {/* Performance Rating + Detailed Tabular Performance Summary */}
+              <div className="mb-6 flex flex-col items-center gap-5 border-y border-white/10 py-5 sm:flex-row sm:items-stretch sm:justify-between">
+                {/* Left: Performance Grade Emblem */}
+                <div className="flex flex-col items-center justify-center sm:w-36 sm:border-r sm:border-white/10 sm:pr-5">
+                  <div className="mb-1.5 text-[11px] text-slate-400">Performance</div>
+                  <div
+                    className={`flex h-16 w-16 items-center justify-center rounded-lg border font-display text-4xl font-extrabold ${rankBorder} ${rankColor}`}
+                  >
+                    {perf?.rank ?? 'A'}
+                  </div>
+                  <div className="mt-1.5 text-xs font-semibold text-slate-200">
+                    {perf?.rankTitle ?? 'Aether Champion'}
+                  </div>
+                </div>
+
+                {/* Right: 6-Metric Performance Grid (unboxed tabular figures) */}
+                <div className="grid flex-1 grid-cols-3 gap-x-4 gap-y-3.5 text-left">
+                  <div>
+                    <div className="text-[11px] text-slate-400">Clear Time</div>
+                    <div className="font-mono-num text-base font-bold text-white">
+                      {formattedTime}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Max Combo</div>
+                    <div className="font-mono-num text-base font-bold text-amber-300">
+                      {perf ? `${perf.maxCombo} Hits` : '0 Hits'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Vitality Left</div>
+                    <div className="font-mono-num text-base font-bold text-emerald-300">
+                      {perf ? `${perf.hpRemainingPct}%` : '100%'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Enemies Slain</div>
+                    <div className="font-mono-num text-base font-semibold text-slate-100">
+                      {perf ? perf.enemiesDefeated : hud.enemiesDefeated}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Perfect Parries</div>
+                    <div className="font-mono-num text-base font-semibold text-sky-300">
+                      {perf ? perf.parriesCount : hud.parriesCount}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[11px] text-slate-400">Clear Bonus</div>
+                    <div className="font-mono-num text-base font-semibold text-amber-200">
+                      +{perf ? perf.clearBonus.toLocaleString() : 0}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Total Score Line */}
+              <div className="mb-5 flex items-center justify-center gap-6 text-xs text-slate-300">
+                <span>
+                  Total Score{' '}
+                  <strong className="font-mono-num ml-1 text-sm text-white">
+                    {hud.score.toLocaleString()}
+                  </strong>
+                </span>
+                <span className="text-slate-600" aria-hidden="true">·</span>
+                <span>
+                  Best Score{' '}
+                  <strong className="font-mono-num ml-1 text-sm text-amber-300">
+                    {hud.highScore.toLocaleString()}
+                  </strong>
+                </span>
+                {perf && perf.damageTakenHits === 0 && (
+                  <>
+                    <span className="text-slate-600" aria-hidden="true">·</span>
+                    <span className="font-semibold text-emerald-300">No-Damage Clear</span>
+                  </>
+                )}
+              </div>
+
+              {/* Realm Journey Progress Track (clickable area transition selector) */}
+              <div className="mb-6 text-left">
+                <div className="mb-2 flex items-center justify-between text-xs">
+                  <span className="font-medium text-slate-300">Realm Journey</span>
+                  <span className="text-slate-400">
+                    Next · <span className="font-semibold text-white">{nextPalette.name}</span>
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-6">
+                  {BIOME_ORDER.map((id, idx) => {
+                    const b = BIOME_PALETTES[id];
+                    const isCurrent = id === hud.biome;
+                    const isNext = id === hud.transition.toBiome;
+                    const isCleared = idx <= currentBiomeIdx;
+                    return (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => onAdvanceNextArea(id)}
+                        className={`group flex flex-col items-start rounded-lg border px-2.5 py-2 text-left transition-colors cursor-pointer ${
+                          isNext
+                            ? 'border-amber-300/65 bg-amber-400/14 text-white'
+                            : isCurrent
+                              ? 'border-emerald-400/45 bg-emerald-500/10 text-emerald-200'
+                              : 'border-white/10 bg-white/[0.03] text-slate-300 hover:border-white/25 hover:bg-white/[0.08] hover:text-white'
+                        }`}
+                      >
+                        <div className="mb-1 flex w-full items-center justify-between text-[10px]">
+                          <span className="font-mono-num text-slate-400">0{idx + 1}</span>
+                          {isCleared && <Check className="h-3 w-3 text-emerald-400" />}
+                        </div>
+                        <span className="w-full truncate text-[11px] font-semibold">
+                          {b.name}
+                        </span>
+                        <div
+                          className="mt-1.5 h-0.5 w-full rounded-full opacity-80"
+                          style={{ backgroundColor: b.hudAccent }}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Primary & Secondary Actions */}
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => onAdvanceNextArea()}
+                  className="inline-flex items-center gap-2 rounded-lg bg-amber-400 px-6 py-2.5 text-sm font-bold text-slate-950 shadow-[0_0_24px_rgba(251,191,36,0.3)] transition-colors hover:bg-amber-300 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {hud.transition.isCampaignComplete
+                    ? `New Journey: ${nextPalette.name}`
+                    : `Advance to ${nextPalette.name}`}
+                  <ArrowRight className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onStart}
+                  className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-4 py-2.5 text-sm font-semibold text-slate-200 transition-colors hover:bg-white/12 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  Replay Area
+                </button>
+                <button
+                  type="button"
+                  onClick={onReturnTitle}
+                  className="rounded-lg px-3.5 py-2.5 text-xs font-medium text-slate-400 transition-colors hover:text-white whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  Title Screen
+                </button>
+              </div>
+              <div className="mt-3 text-[11px] text-slate-400">
+                Press Enter to depart for {nextPalette.name}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* BEAT 3 & 4: SEAMLESS CROSS-MAP CURTAIN & NEW AREA ARRIVAL TITLE CARD */}
+      {hud.phase === 'victory' &&
+        (hud.transition.stage === 'departing' || hud.transition.stage === 'arriving') && (
+          <>
+            {/* Subtle cinema letterbox during hero walk-out / arrival jog */}
+            <div className="fixed inset-x-0 top-0 h-12 bg-gradient-to-b from-[#05070c] to-transparent" />
+            <div className="fixed inset-x-0 bottom-0 h-12 bg-gradient-to-t from-[#05070c] to-transparent" />
+
+            {/* Smooth Fade Curtain + Destination Area Card */}
+            <div
+              className="fixed inset-0 flex flex-col items-center justify-center bg-[#060910] px-6 text-center"
+              style={{ opacity: hud.transition.fadeAlpha }}
+            >
+              <div className="mb-2 text-xs font-medium tracking-[0.26em] text-slate-400">
+                Area {hud.transition.areaIndex} of {hud.transition.totalAreas}
+              </div>
+              <h2 className="font-display text-4xl font-extrabold tracking-[0.14em] text-white sm:text-5xl">
+                {nextPalette.name}
+              </h2>
+              <div
+                className="my-3 h-0.5 w-48"
+                style={{
+                  background: `linear-gradient(90deg, transparent, ${nextPalette.hudAccent}, transparent)`,
+                }}
+              />
+              <p className="text-sm text-slate-300">{nextPalette.subtitle}</p>
+              <p className="mt-4 text-xs text-slate-400">
+                Guardian · <span className="text-slate-200">{nextPalette.bossName}</span>, {nextPalette.bossTitle}
+              </p>
+            </div>
+          </>
+        )}
+
+      {/* GAME OVER MODAL */}
+      {hud.phase === 'gameover' && (
         <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/72 p-4">
           <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#0b101b] p-7 text-center shadow-2xl">
             <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/5 ring-1 ring-white/15">
-              {hud.phase === 'victory' ? (
-                <Shield className="h-6 w-6 text-amber-300" />
-              ) : (
-                <Skull className="h-6 w-6 text-rose-400" />
-              )}
+              <Skull className="h-6 w-6 text-rose-400" />
             </div>
 
-            <h2
-              className={`font-display mb-1 text-3xl font-extrabold tracking-wider ${
-                hud.phase === 'victory' ? 'text-amber-300' : 'text-rose-400'
-              }`}
-            >
-              {hud.phase === 'victory' ? 'Stage Clear' : 'Defeated'}
+            <h2 className="font-display mb-1 text-3xl font-extrabold tracking-wider text-rose-400">
+              Defeated
             </h2>
             <p className="mb-6 text-xs text-slate-400">
-              {hud.phase === 'victory'
-                ? `${palette.bossName} has fallen in ${palette.name}.`
-                : `Fallen in ${palette.name} · Zone ${hud.zone}`}
+              Fallen in {palette.name} · Zone {hud.zone}
             </p>
 
-            {/* Run Summary Grid */}
-            <div className="mb-6 grid grid-cols-2 gap-3 rounded-lg border border-white/10 bg-slate-950/75 p-4 text-left">
+            {/* Unboxed Run Summary */}
+            <div className="mb-6 grid grid-cols-2 gap-3 border-y border-white/10 py-4 text-left">
               <div>
                 <div className="text-[11px] text-slate-400">Score</div>
                 <div className="font-mono-num text-lg font-bold text-white">
@@ -560,7 +1096,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             </div>
 
-            {/* Quick Biome Switcher on Victory/Game Over */}
+            {/* Quick Biome Switcher on Game Over */}
             <div className="mb-5 flex flex-wrap justify-center gap-1.5">
               {BIOME_ORDER.map((id) => {
                 const b = BIOME_PALETTES[id];

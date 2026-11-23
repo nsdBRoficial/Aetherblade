@@ -5,7 +5,10 @@ import {
   BIOME_PALETTES,
   BiomeId,
   BOSS_TRIGGER_X,
+  DIFFICULTY_PRESETS,
+  DifficultyId,
   GamePhase,
+  getComboDamageMultiplier,
   HudSnapshot,
   LEVEL_LENGTH,
   ShaderStyleMode,
@@ -15,9 +18,40 @@ import { InputState, PlayerController } from './PlayerController';
 import { EnemyManager } from './EnemyManager';
 import { ProceduralAudio, VfxManager } from './VfxAudio';
 import { PostProcessingPass } from './PostProcessingPass';
+import { VictorySequence } from './VictorySequence';
+import { MagicUpdateCallbacks, PlayerMagicSystem } from './PlayerMagicSystem';
+import { ExecutionCallbacks, ExecutionSystem } from './ExecutionSystem';
+import { BIOME_ROSTERS } from './BiomeRoster';
 
 const SHADER_MODE_ORDER: ShaderStyleMode[] = ['hd2d', 'retro16', 'grade', 'off'];
 const HIGH_SCORE_KEY = 'aetherblade_25d_highscore_v1';
+const DIFFICULTY_KEY = 'aetherblade_25d_difficulty_v1';
+const BOSS_INTRO_DURATION = 2.35;
+
+function smoothstep01(t: number): number {
+  const u = THREE.MathUtils.clamp(t, 0, 1);
+  return u * u * (3 - 2 * u);
+}
+
+// Reusable scratch colors for zero-GC dynamic boss lighting interpolation
+const _fogCol = new THREE.Color();
+const _sunCol = new THREE.Color();
+const _hemiSkyCol = new THREE.Color();
+const _hemiGndCol = new THREE.Color();
+const _ambCol = new THREE.Color();
+const _skyTintCol = new THREE.Color();
+const _panoTintCol = new THREE.Color();
+const _bossFogPhase1 = new THREE.Color(0x281220);
+const _bossFogPhase2 = new THREE.Color(0x2e0b14);
+const _bossSunPhase1 = new THREE.Color(0xff9c6b);
+const _bossSunPhase2 = new THREE.Color(0xff5238);
+const _bossHemiSky1 = new THREE.Color(0x6b3556);
+const _bossHemiSky2 = new THREE.Color(0x8c2432);
+const _bossSkyTint1 = new THREE.Color(0x7c586e);
+const _bossSkyTint2 = new THREE.Color(0x5e2932);
+const _bossPanoTint1 = new THREE.Color(0x8c6878);
+const _bossPanoTint2 = new THREE.Color(0x733a42);
+const _whiteCol = new THREE.Color(0xffffff);
 
 function boxesOverlap(a: AABB, b: AABB): boolean {
   return (
@@ -56,12 +90,16 @@ export class GameEngine {
   private ambientLight: THREE.AmbientLight;
   private hemiLight: THREE.HemisphereLight;
   private dirLight: THREE.DirectionalLight;
+  private bossSpotLight: THREE.PointLight;
 
   // Core game subsystems
   private biome: BiomeId = 'deep-forest';
+  private difficulty: DifficultyId = 'knight';
   private level: LevelBuilder;
   private player: PlayerController;
   private enemies: EnemyManager;
+  private magic: PlayerMagicSystem;
+  private execution: ExecutionSystem;
   private vfx: VfxManager;
   private audio: ProceduralAudio;
   private postPass: PostProcessingPass;
@@ -74,11 +112,25 @@ export class GameEngine {
   private comboTimer = 0;
   private enemiesDefeated = 0;
   private parriesCount = 0;
+  private stageElapsed = 0;
+  private stageMaxCombo = 0;
+  private stageEnemiesDefeated = 0;
+  private stageParriesCount = 0;
+  private stageDamageHits = 0;
   private spriteSource: 'attached' | 'custom' | 'procedural' = 'procedural';
 
-  // Camera & Game Feel
+  // Camera, Boss Intro Choreography, VictorySequence & Dynamic Multi-Phase Atmosphere
   private camX = 6;
   private camY = 3.2;
+  private camZ = 20;
+  private bossIntroActive = false;
+  private bossIntroTimer = 0;
+  private bossIntroRoared = false;
+  private bossIntroStartX = 148;
+  private bossIntroStartY = 3.2;
+  private bossAtmosphereLevel = 0;
+  private lastBossPhase: 1 | 2 = 1;
+  private victorySeq = new VictorySequence();
   private shakeIntensity = 0;
   private hitStopTimer = 0;
   private elapsed = 0;
@@ -106,18 +158,25 @@ export class GameEngine {
   private mouseRightHeld = false;
   private queuedJump = false;
   private queuedAttack = false;
+  private queuedAttackRelease = false;
   private queuedGuard = false;
+  private queuedGuardRelease = false;
   private queuedDash = false;
+  private queuedExecute = false;
 
   constructor(container: HTMLElement, onHudUpdate: (snapshot: HudSnapshot) => void) {
     this.container = container;
     this.onHudUpdate = onHudUpdate;
     this.isSoftwareGl = detectSoftwareGl();
 
-    // Load saved high score safely
+    // Load saved high score & difficulty safely
     try {
       const saved = window.localStorage.getItem(HIGH_SCORE_KEY);
       if (saved) this.highScore = Math.max(0, parseInt(saved, 10) || 0);
+      const savedDiff = window.localStorage.getItem(DIFFICULTY_KEY) as DifficultyId | null;
+      if (savedDiff && savedDiff in DIFFICULTY_PRESETS) {
+        this.difficulty = savedDiff;
+      }
     } catch {
       this.highScore = 0;
     }
@@ -173,7 +232,15 @@ export class GameEngine {
     this.dirLight.shadow.camera.bottom = -10;
     this.dirLight.shadow.bias = -0.0005;
     this.dirLight.shadow.normalBias = 0.02;
-    this.scene.add(this.ambientLight, this.hemiLight, this.dirLight, this.dirLight.target);
+    this.bossSpotLight = new THREE.PointLight(0xff5a2a, 0, 24, 1.45);
+    this.bossSpotLight.position.set(171, 3.2, 3.4);
+    this.scene.add(
+      this.ambientLight,
+      this.hemiLight,
+      this.dirLight,
+      this.dirLight.target,
+      this.bossSpotLight,
+    );
 
     // Instantiate core game subsystems
     this.audio = new ProceduralAudio();
@@ -190,6 +257,13 @@ export class GameEngine {
       this.emitHud();
     });
     this.enemies = new EnemyManager(this.scene, pal);
+    this.magic = new PlayerMagicSystem(this.scene);
+    this.execution = new ExecutionSystem(this.scene);
+
+    // Apply initial difficulty tuning before spawning wave
+    const diffCfg = DIFFICULTY_PRESETS[this.difficulty];
+    this.player.incomingDamageMult = diffCfg.playerDamageMult;
+    this.enemies.setDifficulty(diffCfg);
     this.enemies.spawnStageWave();
 
     // Full-scene post-processing pass: biome color grading + 4x4 Bayer dither & color quantization
@@ -300,8 +374,20 @@ export class GameEngine {
       return;
     }
 
+    if (this.phase === 'victory' && (code === 'Enter' || code === 'Space')) {
+      e.preventDefault();
+      if (this.victorySeq.stage === 'intermission') {
+        this.advanceToNextArea();
+      } else if (this.victorySeq.skipCelebrateToIntermission()) {
+        this.emitHud();
+      }
+      return;
+    }
+
     if ((this.phase === 'gameover' || this.phase === 'victory') && code === 'KeyR') {
-      this.startGame();
+      if (!this.victorySeq.isBusyTransitioning) {
+        this.startGame();
+      }
       return;
     }
 
@@ -327,11 +413,31 @@ export class GameEngine {
       if (code === 'KeyL' || code === 'ShiftLeft' || code === 'ShiftRight') {
         this.queuedDash = true;
       }
+      if (code === 'KeyE' || code === 'KeyQ') {
+        this.queuedExecute = true;
+      }
     }
   };
 
   private handleKeyUp = (e: KeyboardEvent): void => {
-    this.keysHeld.delete(e.code);
+    const code = e.code;
+    this.keysHeld.delete(code);
+    if (
+      (code === 'KeyJ' || code === 'KeyZ') &&
+      !this.mouseLeftHeld &&
+      !this.keysHeld.has('KeyJ') &&
+      !this.keysHeld.has('KeyZ')
+    ) {
+      this.queuedAttackRelease = true;
+    }
+    if (
+      (code === 'KeyK' || code === 'KeyX') &&
+      !this.mouseRightHeld &&
+      !this.keysHeld.has('KeyK') &&
+      !this.keysHeld.has('KeyX')
+    ) {
+      this.queuedGuardRelease = true;
+    }
   };
 
   private handleMouseDown = (e: MouseEvent): void => {
@@ -343,15 +449,47 @@ export class GameEngine {
     } else if (e.button === 2) {
       this.mouseRightHeld = true;
       this.queuedGuard = true;
+    } else if (e.button === 1) {
+      e.preventDefault();
+      this.queuedExecute = true;
     }
   };
 
   private handleMouseUp = (e: MouseEvent): void => {
-    if (e.button === 0) this.mouseLeftHeld = false;
-    if (e.button === 2) this.mouseRightHeld = false;
+    if (e.button === 0) {
+      this.mouseLeftHeld = false;
+      if (!this.keysHeld.has('KeyJ') && !this.keysHeld.has('KeyZ')) {
+        this.queuedAttackRelease = true;
+      }
+    }
+    if (e.button === 2) {
+      this.mouseRightHeld = false;
+      if (!this.keysHeld.has('KeyK') && !this.keysHeld.has('KeyX')) {
+        this.queuedGuardRelease = true;
+      }
+    }
   };
 
+  public selectDifficulty(diff: DifficultyId): void {
+    if (!(diff in DIFFICULTY_PRESETS)) return;
+    this.difficulty = diff;
+    const cfg = DIFFICULTY_PRESETS[diff];
+    this.player.incomingDamageMult = cfg.playerDamageMult;
+    this.enemies.setDifficulty(cfg);
+    try {
+      window.localStorage.setItem(DIFFICULTY_KEY, diff);
+    } catch {
+      // Ignore storage restrictions
+    }
+    this.emitHud();
+  }
+
   public selectBiome(biomeId: BiomeId): void {
+    // From Victory Intermission, switching areas uses the full cinematic walk-out transition
+    if (this.phase === 'victory' && this.victorySeq.stage === 'intermission') {
+      this.advanceToNextArea(biomeId);
+      return;
+    }
     if (this.biome === biomeId) return;
     this.biome = biomeId;
     const pal = BIOME_PALETTES[biomeId];
@@ -382,7 +520,18 @@ export class GameEngine {
     // Preserve decoded enemy sprite atlases while updating biome palette
     this.enemies.setPalette(pal);
     this.enemies.spawnStageWave();
+    this.magic.clear();
+    this.execution.clear();
     this.rebuildDebugPlatforms();
+
+    this.bossIntroActive = false;
+    this.bossIntroTimer = 0;
+    this.bossIntroRoared = false;
+    this.bossAtmosphereLevel = 0;
+    this.lastBossPhase = 1;
+    this.bossSpotLight.intensity = 0;
+    this.postPass.setBossIntensity(0);
+    this.victorySeq.reset();
 
     if (this.phase !== 'title') {
       this.startGame();
@@ -398,12 +547,16 @@ export class GameEngine {
     this.comboTimer = 0;
     this.enemiesDefeated = 0;
     this.parriesCount = 0;
+    this.resetStageMetrics();
     this.hitStopTimer = 0;
     this.shakeIntensity = 0;
     this.queuedJump = false;
     this.queuedAttack = false;
+    this.queuedAttackRelease = false;
     this.queuedGuard = false;
+    this.queuedGuardRelease = false;
     this.queuedDash = false;
+    this.queuedExecute = false;
 
     // Reset level props & boss barriers cleanly
     this.scene.remove(this.level.root);
@@ -417,12 +570,41 @@ export class GameEngine {
     this.rebuildDebugPlatforms();
 
     this.player.reset();
+    const diffCfg = DIFFICULTY_PRESETS[this.difficulty];
+    this.player.incomingDamageMult = diffCfg.playerDamageMult;
+    this.enemies.setDifficulty(diffCfg);
     this.enemies.spawnStageWave();
+    this.magic.clear();
+    this.execution.clear();
     this.vfx.clearTransient();
     this.camX = this.player.x + 2.5;
     this.camY = 3.2;
+    this.camZ = 20;
+    this.bossIntroActive = false;
+    this.bossIntroTimer = 0;
+    this.bossIntroRoared = false;
+    this.bossAtmosphereLevel = 0;
+    this.lastBossPhase = 1;
+    this.victorySeq.reset();
+    this.resetAtmosphereToBiome();
 
     this.setPhase('playing');
+  }
+
+  private resetStageMetrics(): void {
+    this.stageElapsed = 0;
+    this.stageMaxCombo = 0;
+    this.stageEnemiesDefeated = 0;
+    this.stageParriesCount = 0;
+    this.stageDamageHits = 0;
+  }
+
+  public advanceToNextArea(targetBiome?: BiomeId): void {
+    if (this.phase !== 'victory') return;
+    this.audio.unlock();
+    if (this.victorySeq.startDeparture(this.biome, this.audio, targetBiome)) {
+      this.emitHud();
+    }
   }
 
   public setPhase(next: GamePhase): void {
@@ -431,6 +613,9 @@ export class GameEngine {
       this.keysHeld.clear();
       this.mouseLeftHeld = false;
       this.mouseRightHeld = false;
+    }
+    if (next === 'title') {
+      this.victorySeq.reset();
     }
     this.emitHud();
   }
@@ -507,6 +692,7 @@ export class GameEngine {
       const panX = 11 + Math.sin(this.elapsed * 0.28) * 6.5;
       this.camX = THREE.MathUtils.lerp(this.camX, panX, 1 - Math.exp(-3 * dt));
       this.camY = 3.3 + Math.sin(this.elapsed * 0.5) * 0.25;
+      this.camZ = THREE.MathUtils.lerp(this.camZ, 20, 1 - Math.exp(-3 * dt));
       this.player.animator.setState('IDLE');
       this.player.animator.update(dt, false);
       this.level.update(dt, this.camX, this.elapsed);
@@ -515,8 +701,11 @@ export class GameEngine {
     } else if (this.phase === 'playing') {
       this.elapsed += dt;
       this.stepPlaying(dt);
+    } else if (this.phase === 'victory') {
+      this.elapsed += dt;
+      this.stepVictoryAndTransition(dt);
     } else {
-      // Paused / Victory / Game Over: keep subtle ambient particles drifting smoothly
+      // Paused / Game Over: keep subtle ambient particles drifting smoothly
       this.elapsed += dt * 0.35;
       this.vfx.update(dt * 0.35, this.camX, this.elapsed);
     }
@@ -553,30 +742,55 @@ export class GameEngine {
         this.keysHeld.has('KeyW') ||
         this.keysHeld.has('ArrowUp'),
       jumpJustPressed: this.queuedJump,
+      attackHeld:
+        this.keysHeld.has('KeyJ') ||
+        this.keysHeld.has('KeyZ') ||
+        this.mouseLeftHeld,
       attackJustPressed: this.queuedAttack,
+      attackJustReleased: this.queuedAttackRelease,
       guardHeld:
         this.keysHeld.has('KeyK') ||
         this.keysHeld.has('KeyX') ||
         this.mouseRightHeld,
       guardJustPressed: this.queuedGuard,
+      guardJustReleased: this.queuedGuardRelease,
       dashJustPressed: this.queuedDash,
+      executeJustPressed: this.queuedExecute,
     };
     this.queuedJump = false;
     this.queuedAttack = false;
+    this.queuedAttackRelease = false;
     this.queuedGuard = false;
+    this.queuedGuardRelease = false;
     this.queuedDash = false;
+    this.queuedExecute = false;
 
-    // Trigger Boss Arena when player crosses X = 148
-    if (!this.enemies.bossTriggered && this.player.x >= BOSS_TRIGGER_X) {
-      this.enemies.bossTriggered = true;
-      this.level.setArenaLocked(true);
-      this.audio.playBossRoar();
-      this.addShake(0.45);
-      if (this.enemies.boss) {
-        this.vfx.spawnRing(this.enemies.boss.x, 1.8, 0xf97316, 0.5, 5.5, 0.45);
-      }
-      this.emitHud();
+    // Handle automated cinematic Boss Intro Camera Pan when active
+    if (this.bossIntroActive) {
+      this.stepBossIntro(dt);
+      return;
     }
+
+    // Trigger automated Boss Intro Pan & Lighting Shift when player approaches the Boss Arena
+    if (!this.enemies.bossTriggered && !this.bossIntroActive && this.player.x >= BOSS_TRIGGER_X) {
+      this.bossIntroActive = true;
+      this.bossIntroTimer = 0;
+      this.bossIntroRoared = false;
+      this.bossIntroStartX = this.camX;
+      this.bossIntroStartY = this.camY;
+      this.level.setArenaLocked(true);
+      this.queuedJump = false;
+      this.queuedAttack = false;
+      this.queuedAttackRelease = false;
+      this.queuedGuard = false;
+      this.queuedGuardRelease = false;
+      this.queuedDash = false;
+      this.queuedExecute = false;
+      this.emitHud();
+      return;
+    }
+
+    this.stageElapsed += dt;
 
     // Combo decay timer
     if (this.combo > 0) {
@@ -587,7 +801,109 @@ export class GameEngine {
       }
     }
 
-    // Update player
+    const diffCfg = DIFFICULTY_PRESETS[this.difficulty];
+    const scoreMult = diffCfg.scoreMult;
+    const magicCallbacks: MagicUpdateCallbacks = {
+      onEnemyHit: (ev) => {
+        this.combo++;
+        if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
+        this.comboTimer = 3.5;
+        if (ev.refundStamina > 0) {
+          this.player.stamina = Math.min(
+            this.player.maxStamina,
+            this.player.stamina + ev.refundStamina,
+          );
+        }
+        const basePts = ev.defeated
+          ? ev.enemy.type === 'boss'
+            ? 2500
+            : ev.enemy.type === 'brute'
+              ? 300
+              : 150
+          : 35;
+        this.score += Math.round(basePts * scoreMult);
+        if (ev.defeated) {
+          this.enemiesDefeated++;
+          this.stageEnemiesDefeated++;
+          if (ev.enemy.type !== 'boss' && Math.random() < 0.34) {
+            this.level.spawnPickup(ev.enemy.x, ev.enemy.y, this.player.hp < 75 ? 'heal' : 'gem');
+          }
+        }
+        if (ev.heavy || ev.defeated) {
+          this.hitStopTimer = Math.max(this.hitStopTimer, ev.defeated ? 0.055 : 0.032);
+          this.addShake(ev.defeated ? 0.3 : 0.16);
+        }
+        this.saveHighScoreIfNeeded();
+      },
+      onPropDestroyed: (px, py, isCrystal) => {
+        this.addShake(0.14);
+        this.score += Math.round(60 * scoreMult);
+        const dropHeal =
+          isCrystal || this.player.hp < this.player.maxHp * 0.72 || Math.random() < 0.45;
+        this.level.spawnPickup(px, py, dropHeal ? 'heal' : 'gem');
+      },
+      onProjectileVaporized: () => {
+        this.combo++;
+        if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
+        this.comboTimer = 3.5;
+        this.score += Math.round(45 * scoreMult);
+        this.saveHighScoreIfNeeded();
+      },
+      onScreenPulse: (colorHex, flashStrength, shake) => {
+        this.postPass.triggerFlash(colorHex, flashStrength);
+        this.addShake(shake);
+      },
+    };
+
+    const executionCallbacks: ExecutionCallbacks = {
+      onEnemyHit: (ev) => {
+        this.combo += ev.comboGain;
+        if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
+        this.comboTimer = 3.5;
+        if (ev.staminaRefund > 0) {
+          this.player.stamina = Math.min(
+            this.player.maxStamina,
+            this.player.stamina + ev.staminaRefund,
+          );
+        }
+        const basePts = ev.defeated
+          ? ev.enemy.type === 'boss'
+            ? 2500
+            : ev.enemy.type === 'brute'
+              ? 360
+              : ev.executed
+                ? 280
+                : 180
+          : 55;
+        this.score += Math.round(basePts * scoreMult);
+        if (ev.defeated) {
+          this.enemiesDefeated++;
+          this.stageEnemiesDefeated++;
+          if (ev.enemy.type !== 'boss' && Math.random() < 0.45) {
+            this.level.spawnPickup(ev.enemy.x, ev.enemy.y, this.player.hp < 80 ? 'heal' : 'gem');
+          }
+        }
+        this.saveHighScoreIfNeeded();
+      },
+      onPropDestroyed: (px, py, isCrystal) => {
+        this.score += Math.round(60 * scoreMult);
+        const dropHeal =
+          isCrystal || this.player.hp < this.player.maxHp * 0.72 || Math.random() < 0.45;
+        this.level.spawnPickup(px, py, dropHeal ? 'heal' : 'gem');
+      },
+      onProjectileVaporized: () => {
+        this.combo++;
+        if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
+        this.comboTimer = 3.5;
+        this.score += Math.round(50 * scoreMult);
+        this.saveHighScoreIfNeeded();
+      },
+      onShake: (amount) => {
+        this.addShake(amount);
+      },
+    };
+
+    // Update player (hold-to-charge spells + 3-Hit Combo Biome Execution Finisher)
     this.player.update(
       dt,
       input,
@@ -595,7 +911,61 @@ export class GameEngine {
       this.vfx,
       this.audio,
       this.enemies.bossTriggered && !this.enemies.bossDefeated,
+      {
+        onCastAetherWave: (chargeLevel) => {
+          const comboMult = getComboDamageMultiplier(this.combo).mult;
+          this.magic.castAetherWave(
+            this.player,
+            chargeLevel,
+            comboMult,
+            this.vfx,
+            this.audio,
+            magicCallbacks,
+          );
+        },
+        onCastAegisNova: (chargeLevel) => {
+          const comboMult = getComboDamageMultiplier(this.combo).mult;
+          this.magic.castAegisNova(
+            this.player,
+            chargeLevel,
+            comboMult,
+            this.enemies,
+            this.vfx,
+            this.audio,
+            magicCallbacks,
+          );
+        },
+        onTriggerExecution: () => {
+          const comboMult = getComboDamageMultiplier(this.combo).mult;
+          this.execution.trigger(
+            this.biome,
+            this.player,
+            this.camX,
+            comboMult,
+            this.enemies,
+            this.vfx,
+            this.audio,
+            this.postPass,
+            executionCallbacks,
+          );
+          this.emitHud();
+        },
+      },
     );
+
+    // Update active screen-wide Biome Execution sequence (full fluidity even during slow-mo beat)
+    this.execution.update(
+      dt,
+      this.enemies,
+      this.level,
+      this.vfx,
+      this.audio,
+      this.postPass,
+      executionCallbacks,
+    );
+
+    // Update active player magic projectiles (Aether Blade Waves & Homing Sanctum Orbs)
+    this.magic.update(dt, this.enemies, this.level, this.vfx, this.audio, magicCallbacks);
 
     // Check player sword hitbox against destructible props & enemies
     const swordHitbox = this.player.getAttackHitbox();
@@ -620,7 +990,7 @@ export class GameEngine {
             this.level.root.remove(prop.group);
             this.audio.playBreakProp();
             this.addShake(0.16);
-            this.score += 60;
+            this.score += Math.round(60 * scoreMult);
             const burstColor =
               prop.kind === 'crystal' ? this.level.palette.torchColor : 0xb5834a;
             this.vfx.spawnBurst(prop.x, prop.y + 0.6, 0.1, 16, burstColor, 6.5, 18, 0.95);
@@ -637,12 +1007,12 @@ export class GameEngine {
         }
       }
 
-      // 2. Enemies & Boss
+      // 2. Enemies & Boss (with tiered combo damage multipliers up to 2.40x!)
       for (const enemy of this.enemies.enemies) {
         if (!enemy.alive || enemy.lastHitByAttackId === attackId) continue;
         if (boxesOverlap(swordHitbox, this.enemies.getEnemyHurtbox(enemy))) {
           enemy.lastHitByAttackId = attackId;
-          const comboMult = 1 + Math.min(this.combo, 20) * 0.03;
+          const comboMult = getComboDamageMultiplier(this.combo).mult;
           const finalDmg = Math.round(damage * comboMult);
           const defeated = this.enemies.damageEnemy(
             enemy,
@@ -654,17 +1024,20 @@ export class GameEngine {
           );
 
           this.combo++;
-          this.comboTimer = 3.2;
-          this.score += defeated
+          if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
+          this.comboTimer = 3.5;
+          const basePts = defeated
             ? enemy.type === 'boss'
               ? 2500
               : enemy.type === 'brute'
                 ? 300
                 : 150
             : 25;
+          this.score += Math.round(basePts * scoreMult);
 
           if (defeated) {
             this.enemiesDefeated++;
+            this.stageEnemiesDefeated++;
             if (enemy.type !== 'boss' && Math.random() < 0.32) {
               this.level.spawnPickup(enemy.x, enemy.y, this.player.hp < 75 ? 'heal' : 'gem');
             }
@@ -712,9 +1085,10 @@ export class GameEngine {
       }
     }
 
-    // Update enemies & projectiles
+    // Update enemies & projectiles (with brief cinematic slow-mo dilation during Biome Execution)
+    const worldDt = dt * this.execution.getTimeScale();
     this.enemies.update(
-      dt,
+      worldDt,
       this.elapsed,
       this.player,
       this.level,
@@ -723,7 +1097,9 @@ export class GameEngine {
       (res, heavy) => {
         if (res === 'parried') {
           this.parriesCount++;
+          this.stageParriesCount++;
           this.combo += 2;
+          if (this.combo > this.stageMaxCombo) this.stageMaxCombo = this.combo;
           this.comboTimer = 3.5;
           this.score += 120;
           this.hitStopTimer = 0.075;
@@ -731,6 +1107,7 @@ export class GameEngine {
           this.postPass.triggerFlash(0x38bdf8, 0.34);
           this.saveHighScoreIfNeeded();
         } else if (res === 'hit') {
+          this.stageDamageHits++;
           this.combo = 0;
           this.comboTimer = 0;
           this.hitStopTimer = heavy ? 0.06 : 0.035;
@@ -747,31 +1124,49 @@ export class GameEngine {
       this.saveHighScoreIfNeeded();
       this.setPhase('gameover');
     } else if (this.enemies.bossDefeated) {
-      this.level.setArenaLocked(false);
-      this.saveHighScoreIfNeeded();
-      this.setPhase('victory');
+      this.startVictoryScene();
+      return;
     }
+
+    // Detect multi-phase Boss Phase 2 transition for dramatic lighting surge & screen pulse
+    const bossEntity = this.enemies.boss;
+    if (bossEntity && bossEntity.alive && bossEntity.bossPhase === 2 && this.lastBossPhase === 1) {
+      this.lastBossPhase = 2;
+      const bossColor = BIOME_ROSTERS[this.biome].boss.primaryHex;
+      this.addShake(0.55);
+      this.postPass.triggerFlash(bossColor, 0.44);
+    }
+
+    // Update dynamic multi-phase boss environment lighting
+    this.updateBossAtmosphere(dt);
 
     // Update world, particles, and damped 2.5D camera
-    this.level.update(dt, this.camX, this.elapsed);
+    this.level.update(worldDt, this.camX, this.elapsed);
     this.vfx.update(dt, this.camX, this.elapsed);
 
-    // Camera target: smooth look-ahead to the right, or locked smoothly on Boss Arena
+    // Camera target: smooth look-ahead, approaching sanctum pull-back, or wide Boss Arena framing
     let targetCamX: number;
     let targetCamY: number;
+    let targetCamZ = 20;
     if (this.enemies.bossTriggered && !this.enemies.bossDefeated) {
       targetCamX = 163.5;
-      targetCamY = 3.9;
+      targetCamY = 4.0;
+      targetCamZ = 22.2;
     } else {
-      const lookAhead = this.player.facing === 1 ? 2.65 : -1.1;
+      const approach = THREE.MathUtils.clamp((this.player.x - 130) / 18, 0, 1);
+      const lookAhead = this.player.facing === 1 ? 2.65 + approach * 1.45 : -1.1;
       targetCamX = THREE.MathUtils.clamp(this.player.x + lookAhead, 4.5, LEVEL_LENGTH - 8);
-      targetCamY = THREE.MathUtils.clamp(this.player.y * 0.48 + 3.1, 2.8, 7.6);
+      targetCamY = THREE.MathUtils.clamp(this.player.y * 0.48 + 3.1 + approach * 0.4, 2.8, 7.6);
+      targetCamZ = 20 + approach * 0.85;
     }
+    targetCamZ += this.execution.getCameraZoomOffset();
 
     const camDampX = 1 - Math.exp(-5.6 * dt);
     const camDampY = 1 - Math.exp(-4.2 * dt);
+    const camDampZ = 1 - Math.exp(-3.4 * dt);
     this.camX = THREE.MathUtils.lerp(this.camX, targetCamX, camDampX);
     this.camY = THREE.MathUtils.lerp(this.camY, targetCamY, camDampY);
+    this.camZ = THREE.MathUtils.lerp(this.camZ, targetCamZ, camDampZ);
     this.shakeIntensity *= Math.exp(-11 * dt);
     if (this.shakeIntensity < 0.005) this.shakeIntensity = 0;
 
@@ -781,10 +1176,281 @@ export class GameEngine {
     }
   }
 
+  private stepBossIntro(dt: number): void {
+    this.bossIntroTimer += dt;
+    const t = this.bossIntroTimer;
+    const boss = this.enemies.boss;
+    const bossX = boss ? boss.x : 171;
+
+    // Gently settle hero onto the arena floor in a combat-ready stance facing the Boss
+    this.player.vx *= Math.max(0, 1 - 10 * dt);
+    if (this.player.y > 0) {
+      this.player.vy = Math.max(-24, this.player.vy - 36 * dt);
+      this.player.y = Math.max(0, this.player.y + this.player.vy * dt);
+      if (this.player.y === 0) {
+        this.player.vy = 0;
+        this.player.grounded = true;
+      }
+    }
+    this.player.facing = 1;
+    this.player.animator.setFacing(1);
+    this.player.animator.setState(this.player.y > 0.05 ? 'FALL' : 'IDLE');
+    this.player.syncVisuals(this.level);
+    this.player.animator.update(dt, false);
+
+    // 3-Beat Automated Camera Choreography:
+    //   0.00..0.85s -> Smooth pan + dolly close-up onto the Boss
+    //   0.85..1.60s -> Hold dramatic framing while Boss roars & ignites arena lighting
+    //   1.60..2.35s -> Smooth pull-back to wide Boss Arena tactical framing
+    const bossFocusX = bossX - 0.6;
+    const bossFocusY = 3.5;
+    const bossFocusZ = 15.0;
+    const arenaCenterX = 163.5;
+    const arenaCenterY = 4.0;
+    const arenaCenterZ = 22.2;
+
+    if (t < 0.85) {
+      const k = smoothstep01(t / 0.85);
+      this.camX = THREE.MathUtils.lerp(this.bossIntroStartX, bossFocusX, k);
+      this.camY = THREE.MathUtils.lerp(this.bossIntroStartY, bossFocusY, k);
+      this.camZ = THREE.MathUtils.lerp(20.6, bossFocusZ, k);
+    } else if (t < 1.6) {
+      this.camX = bossFocusX;
+      this.camY = bossFocusY;
+      this.camZ = bossFocusZ;
+      if (!this.bossIntroRoared) {
+        this.bossIntroRoared = true;
+        const bp = BIOME_ROSTERS[this.biome].boss;
+        this.audio.playBossRoar();
+        this.addShake(0.52);
+        this.postPass.triggerFlash(bp.primaryHex, 0.36);
+        this.vfx.flashLight(bossX, 2.2, bp.primaryHex, 15, 0.45);
+        this.vfx.spawnRing(bossX, 2.0, bp.primaryHex, 0.45, 6.2, 0.5);
+        this.vfx.spawnBurst(bossX, 2.0, 0.25, 28, bp.secondaryHex, 8.5, 10, 1.35);
+      }
+    } else {
+      const k = smoothstep01((t - 1.6) / (BOSS_INTRO_DURATION - 1.6));
+      this.camX = THREE.MathUtils.lerp(bossFocusX, arenaCenterX, k);
+      this.camY = THREE.MathUtils.lerp(bossFocusY, arenaCenterY, k);
+      this.camZ = THREE.MathUtils.lerp(bossFocusZ, arenaCenterZ, k);
+    }
+
+    this.shakeIntensity *= Math.exp(-8 * dt);
+    if (this.shakeIntensity < 0.005) this.shakeIntensity = 0;
+
+    this.updateBossAtmosphere(dt);
+    this.level.update(dt, this.camX, this.elapsed);
+    this.vfx.update(dt, this.camX, this.elapsed);
+    this.applyCameraAndShadowFollow();
+
+    if (t >= BOSS_INTRO_DURATION) {
+      this.bossIntroActive = false;
+      this.enemies.bossTriggered = true;
+      this.emitHud();
+    }
+  }
+
+  private startVictoryScene(): void {
+    this.level.setArenaLocked(false);
+    const bossX = this.enemies.boss ? this.enemies.boss.x : 171;
+    const summary = this.victorySeq.trigger(
+      this.biome,
+      { camX: this.camX, camY: this.camY, camZ: this.camZ },
+      bossX,
+      {
+        clearTimeSeconds: this.stageElapsed,
+        maxCombo: this.stageMaxCombo,
+        enemiesDefeated: this.stageEnemiesDefeated,
+        parriesCount: this.stageParriesCount,
+        hp: this.player.hp,
+        maxHp: this.player.maxHp,
+        damageTakenHits: this.stageDamageHits,
+      },
+      this.vfx,
+      this.postPass,
+    );
+    // Award stage clear bonus from genuine performance telemetry
+    this.score += summary.clearBonus;
+    this.saveHighScoreIfNeeded();
+    this.hitStopTimer = 0;
+    this.setPhase('victory');
+  }
+
+  private stepVictoryAndTransition(dt: number): void {
+    const camPose = { camX: this.camX, camY: this.camY, camZ: this.camZ };
+    this.victorySeq.update({
+      dt,
+      elapsed: this.elapsed,
+      camera: camPose,
+      player: this.player,
+      enemies: this.enemies,
+      level: this.level,
+      vfx: this.vfx,
+      audio: this.audio,
+      postPass: this.postPass,
+      onUpdateBossAtmosphere: (stepDt) => this.updateBossAtmosphere(stepDt),
+      onLoadNextArea: (targetBiome) => this.loadNextAreaForArrival(targetBiome),
+      onCompleteArrival: () => this.setPhase('playing'),
+      onEmitHud: () => this.emitHud(),
+    });
+    this.camX = camPose.camX;
+    this.camY = camPose.camY;
+    this.camZ = camPose.camZ;
+    this.shakeIntensity *= Math.exp(-9 * dt);
+    if (this.shakeIntensity < 0.005) this.shakeIntensity = 0;
+    this.applyCameraAndShadowFollow();
+  }
+
+  private loadNextAreaForArrival(targetBiome: BiomeId): void {
+    this.biome = targetBiome;
+    const pal = BIOME_PALETTES[targetBiome];
+
+    // Rebuild 5-layer level, biome particles, palette & enemies while preserving campaign score
+    this.scene.remove(this.level.root);
+    this.level.dispose();
+    this.level = new LevelBuilder(
+      targetBiome,
+      this.renderer.capabilities.getMaxAnisotropy(),
+      this.isSoftwareGl,
+    );
+    this.scene.add(this.level.root);
+
+    this.vfx.clearTransient();
+    this.magic.clear();
+    this.execution.clear();
+    this.vfx.configureBiomeParticles(pal, 6);
+    this.postPass.setBiome(targetBiome);
+    this.enemies.setPalette(pal);
+    this.enemies.setDifficulty(DIFFICULTY_PRESETS[this.difficulty]);
+    this.enemies.spawnStageWave();
+    this.rebuildDebugPlatforms();
+
+    // Restore Hero Vitality & Stamina for the fresh area, staged at western entrance
+    this.player.reset();
+    this.player.x = 1.4;
+    this.player.y = 0;
+    this.player.facing = 1;
+    this.player.animator.setFacing(1);
+    this.player.syncVisuals(this.level);
+
+    this.resetStageMetrics();
+    this.combo = 0;
+    this.comboTimer = 0;
+    this.hitStopTimer = 0;
+    this.shakeIntensity = 0;
+    this.bossIntroActive = false;
+    this.bossIntroTimer = 0;
+    this.bossIntroRoared = false;
+    this.bossAtmosphereLevel = 0;
+    this.lastBossPhase = 1;
+    this.resetAtmosphereToBiome();
+
+    this.camX = 7.6;
+    this.camY = 3.85;
+    this.camZ = 22.8;
+    this.victorySeq.beginArrival();
+    this.applyCameraAndShadowFollow();
+    this.emitHud();
+  }
+
+  private resetAtmosphereToBiome(): void {
+    const pal = BIOME_PALETTES[this.biome];
+    this.scene.background = new THREE.Color(pal.fogColor);
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.setHex(pal.fogColor);
+      this.scene.fog.density = pal.fogDensity;
+    }
+    this.ambientLight.color.setHex(pal.ambientColor);
+    this.ambientLight.intensity = pal.ambientIntensity;
+    this.hemiLight.color.setHex(pal.hemiSky);
+    this.hemiLight.groundColor.setHex(pal.hemiGround);
+    this.hemiLight.intensity = 0.85;
+    this.dirLight.color.setHex(pal.sunColor);
+    this.dirLight.intensity = pal.sunIntensity;
+    this.bossSpotLight.intensity = 0;
+    this.level.setAtmosphereTint(_whiteCol, _whiteCol);
+    this.postPass.setBossIntensity(0);
+  }
+
+  private updateBossAtmosphere(dt: number): void {
+    const pal = BIOME_PALETTES[this.biome];
+    const boss = this.enemies.boss;
+
+    let targetMood = 0;
+    if (this.enemies.bossDefeated) {
+      targetMood = 0;
+    } else if (boss && boss.alive && boss.bossPhase === 2) {
+      targetMood = 1.0; // Phase II Enraged Crimson Eclipse
+    } else if (this.enemies.bossTriggered) {
+      targetMood = 0.62; // Phase I Boss Twilight Sanctum
+    } else if (this.bossIntroActive) {
+      targetMood = THREE.MathUtils.lerp(0.28, 0.66, smoothstep01(this.bossIntroTimer / 1.15));
+    } else if (this.player.x > 130) {
+      // Subtle atmospheric foreshadowing as the player approaches the Boss Arena
+      targetMood = THREE.MathUtils.clamp((this.player.x - 130) / 18, 0, 1) * 0.28;
+    }
+
+    const rate = targetMood > this.bossAtmosphereLevel ? 3.2 : 1.8;
+    this.bossAtmosphereLevel = THREE.MathUtils.lerp(
+      this.bossAtmosphereLevel,
+      targetMood,
+      1 - Math.exp(-rate * dt),
+    );
+
+    const lvl = this.bossAtmosphereLevel;
+    const p1 = THREE.MathUtils.clamp(lvl / 0.62, 0, 1);
+    const p2 = THREE.MathUtils.clamp((lvl - 0.62) / 0.38, 0, 1);
+
+    // 1. Dynamic Fog & Background Shift
+    _fogCol.setHex(pal.fogColor).lerp(_bossFogPhase1, p1 * 0.62).lerp(_bossFogPhase2, p2 * 0.65);
+    if (this.scene.background instanceof THREE.Color) {
+      this.scene.background.copy(_fogCol);
+    }
+    if (this.scene.fog instanceof THREE.FogExp2) {
+      this.scene.fog.color.copy(_fogCol);
+      this.scene.fog.density = pal.fogDensity + p1 * 0.0055 + p2 * 0.004;
+    }
+
+    // 2. Dynamic Sun, Hemisphere & Ambient Rig Shift
+    _sunCol.setHex(pal.sunColor).lerp(_bossSunPhase1, p1 * 0.65).lerp(_bossSunPhase2, p2 * 0.72);
+    this.dirLight.color.copy(_sunCol);
+    this.dirLight.intensity = pal.sunIntensity * (1 - p1 * 0.32 - p2 * 0.14);
+
+    _hemiSkyCol.setHex(pal.hemiSky).lerp(_bossHemiSky1, p1 * 0.68).lerp(_bossHemiSky2, p2 * 0.7);
+    _hemiGndCol.setHex(pal.hemiGround).lerp(_bossFogPhase2, lvl * 0.55);
+    this.hemiLight.color.copy(_hemiSkyCol);
+    this.hemiLight.groundColor.copy(_hemiGndCol);
+    this.hemiLight.intensity = 0.85 * (1 - p1 * 0.35 - p2 * 0.15);
+
+    _ambCol.setHex(pal.ambientColor).lerp(_bossFogPhase1, lvl * 0.55);
+    this.ambientLight.color.copy(_ambCol);
+    this.ambientLight.intensity = pal.ambientIntensity * (1 - p1 * 0.28);
+
+    // 3. Painted Sky & Far Mountain Twilight/Eclipse Tint
+    _skyTintCol.copy(_whiteCol).lerp(_bossSkyTint1, p1).lerp(_bossSkyTint2, p2);
+    _panoTintCol.copy(_whiteCol).lerp(_bossPanoTint1, p1).lerp(_bossPanoTint2, p2);
+    this.level.setAtmosphereTint(_skyTintCol, _panoTintCol);
+
+    // 4. Dramatic Flickering Boss Arena Spotlight tinted to the active Biome Boss
+    if (boss && boss.alive && lvl > 0.18) {
+      const bp = BIOME_ROSTERS[this.biome].boss;
+      this.bossSpotLight.position.set(boss.x, boss.y + 3.2, 3.6);
+      const pulseSpeed = p2 > 0.2 ? 12.0 : 5.5;
+      const flicker = 1 + Math.sin(this.elapsed * pulseSpeed) * (p2 > 0.2 ? 0.22 : 0.12);
+      this.bossSpotLight.color.setHex(p2 > 0.35 ? bp.secondaryHex : bp.primaryHex);
+      this.bossSpotLight.intensity = (p1 * 11.0 + p2 * 8.0) * flicker;
+    } else {
+      this.bossSpotLight.intensity = 0;
+    }
+
+    // 5. Post-Processing Color Grade, Vignette & Bloom Tension Boost
+    this.postPass.setBossIntensity(lvl);
+  }
+
   private applyCameraAndShadowFollow(): void {
     const sx = (Math.random() - 0.5) * 2 * this.shakeIntensity;
     const sy = (Math.random() - 0.5) * 2 * this.shakeIntensity;
-    this.camera.position.set(this.camX + sx, this.camY + sy, 20);
+    this.camera.position.set(this.camX + sx, this.camY + sy, this.camZ);
     this.camera.lookAt(this.camX + sx * 0.35, this.camY - 0.65 + sy * 0.35, 0);
 
     // Keep shadow frustum centered around active camera X
@@ -865,7 +1531,6 @@ export class GameEngine {
             ? 2
             : 1;
 
-    const pal = BIOME_PALETTES[this.biome];
     const bossEntity = this.enemies.boss;
 
     const viewportW = Math.max(1, this.container.clientWidth);
@@ -874,6 +1539,7 @@ export class GameEngine {
     this.onHudUpdate({
       phase: this.phase,
       biome: this.biome,
+      difficulty: this.difficulty,
       hp: Math.ceil(this.player.hp),
       maxHp: this.player.maxHp,
       stamina: Math.round(this.player.stamina),
@@ -881,7 +1547,17 @@ export class GameEngine {
       score: this.score,
       highScore: this.highScore,
       combo: this.combo,
-      comboTimer: THREE.MathUtils.clamp(this.comboTimer / 3.2, 0, 1),
+      comboTimer: THREE.MathUtils.clamp(this.comboTimer / 3.5, 0, 1),
+      comboMultiplier: getComboDamageMultiplier(this.combo).mult,
+      slashStep: this.player.attackStep > 0 ? this.player.attackStep : this.player.lastSlashStep,
+      slashMultiplier: this.player.lastSlashMult,
+      attackCharge: this.player.attackCharge,
+      guardCharge: this.player.guardCharge,
+      execution: this.execution.getHudState(
+        this.biome,
+        this.player.executionWindowTimer,
+        PlayerController.EXECUTION_WINDOW_MAX,
+      ),
       progress,
       zone,
       enemiesDefeated: this.enemiesDefeated,
@@ -891,13 +1567,25 @@ export class GameEngine {
       shaderMode: this.postPass.mode,
       boss: {
         active: this.enemies.bossTriggered && !!bossEntity && bossEntity.alive,
-        name: pal.bossName,
-        title: pal.bossTitle,
+        introActive: this.bossIntroActive,
+        name: BIOME_ROSTERS[this.biome].boss.name,
+        title: BIOME_ROSTERS[this.biome].boss.title,
+        accent: BIOME_ROSTERS[this.biome].boss.accentCss,
         hp: bossEntity ? Math.ceil(bossEntity.hp) : 0,
-        maxHp: bossEntity ? bossEntity.maxHp : 440,
+        maxHp: bossEntity ? bossEntity.maxHp : BIOME_ROSTERS[this.biome].boss.maxHp,
         phase: bossEntity ? bossEntity.bossPhase : 1,
       },
+      transition: this.victorySeq.getSnapshot(this.biome),
       floatingTexts: this.vfx.projectFloatingTexts(this.camera, viewportW, viewportH),
+      offscreenEnemies:
+        this.phase === 'playing' && !this.bossIntroActive
+          ? this.enemies.getOffscreenIndicators(
+              this.camera,
+              this.player.x,
+              viewportW,
+              viewportH,
+            )
+          : [],
       spriteSource: this.spriteSource,
     });
   }
@@ -911,6 +1599,8 @@ export class GameEngine {
     this.level.dispose();
     this.player.dispose();
     this.enemies.dispose();
+    this.magic.dispose();
+    this.execution.dispose();
     this.vfx.dispose();
     this.audio.dispose();
     this.postPass.dispose();

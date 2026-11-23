@@ -22,3 +22,56 @@
   font-family: 'JetBrains Mono', ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
+
+@keyframes comboHitPop {
+  0% {
+    transform: scale(1.46) rotate(-3deg);
+    filter: brightness(1.55);
+  }
+  45% {
+    transform: scale(0.94) rotate(1deg);
+    filter: brightness(1.12);
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    filter: brightness(1);
+  }
+}
+
+@keyframes comboGlowPulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 12px var(--combo-glow-soft),
+      inset 0 0 10px var(--combo-glow-inner);
+  }
+  50% {
+    box-shadow:
+      0 0 26px var(--combo-glow-strong),
+      0 0 42px var(--combo-glow-soft),
+      inset 0 0 18px var(--combo-glow-inner);
+  }
+}
+
+@keyframes comboBurstRing {
+  0% {
+    opacity: 0.85;
+    transform: scale(0.86);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.28);
+  }
+}
+
+.animate-combo-pop {
+  animation: comboHitPop 240ms cubic-bezier(0.22, 1.35, 0.36, 1) forwards;
+}
+
+.animate-combo-glow {
+  animation: comboGlowPulse var(--combo-pulse-dur, 1.4s) ease-in-out infinite;
+}
+
+.animate-combo-burst {
+  animation: comboBurstRing 320ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

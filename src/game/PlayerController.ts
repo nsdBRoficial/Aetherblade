@@ -10,10 +10,20 @@ export interface InputState {
   down: boolean;
   jumpHeld: boolean;
   jumpJustPressed: boolean;
+  attackHeld: boolean;
   attackJustPressed: boolean;
+  attackJustReleased: boolean;
   guardHeld: boolean;
   guardJustPressed: boolean;
+  guardJustReleased: boolean;
   dashJustPressed: boolean;
+  executeJustPressed: boolean;
+}
+
+export interface PlayerSpellCallbacks {
+  onCastAetherWave?: (chargeLevel: number) => void;
+  onCastAegisNova?: (chargeLevel: number) => void;
+  onTriggerExecution?: () => void;
 }
 
 interface DashGhost {
@@ -63,18 +73,41 @@ export class PlayerController {
   private lastSafeX = 3.5;
   private lastSafeY = 0;
 
-  // Combat & Combo state
-  public attackStep: 0 | 1 | 2 | 3 | 4 = 0; // 1..3 ground combo, 4 air attack
+  // Combat & 5-Hit Combo state (1..5 ground combo, 6 air attack)
+  public attackStep: 0 | 1 | 2 | 3 | 4 | 5 | 6 = 0;
+  public lastSlashStep = 0;
+  public lastSlashMult = 1.0;
+  public incomingDamageMult = 1.0;
   private attackTimer = 0;
   private attackDuration = 0;
   private attackQueued = false;
+  private comboGraceTimer = 0;
+  private lastGroundStep: 0 | 1 | 2 | 3 | 4 = 0;
+  private step4SecondHitFired = false;
   public attackInstanceId = 0;
   public isAttackHitboxActive = false;
+
+  // Combo Finisher Execution window (unlocked on completing the 3-hit combo)
+  public static readonly EXECUTION_WINDOW_MAX = 2.6;
+  public executionWindowTimer = 0;
+  private executionWindowOpenedForAttackId = -1;
 
   // Guard & Perfect Parry
   public isGuarding = false;
   public parryWindowTimer = 0; // active perfect parry timing window (190ms)
   private parrySuccessTimer = 0; // plays PARRY animation pose
+
+  // Concentrated Magic Charging (Hold Attack -> Aether Wave, Hold Block -> Aegis Nova)
+  public attackCharge = 0; // 0..1
+  public guardCharge = 0; // 0..1
+  private attackHoldTime = 0;
+  private guardHoldTime = 0;
+  private attackChargeReadyPlayed = false;
+  private guardChargeReadyPlayed = false;
+  private chargePulseTimer = 0;
+  private chargeSparkTimer = 0;
+  private castPoseTimer = 0;
+  private chargeAuraSpin = 0;
 
   // Dash & Invincibility
   private dashTimer = 0;
@@ -84,11 +117,17 @@ export class PlayerController {
   public invulnTimer = 0;
   private hurtTimer = 0;
 
-  // Contact shadow
+  // Contact shadow & 3D HDR Charge Aura meshes
   private shadowMesh: THREE.Mesh;
   private shadowGeo: THREE.PlaneGeometry;
   private shadowMat: THREE.MeshBasicMaterial;
   private shadowTex: THREE.CanvasTexture;
+  private chargeRingGeo: THREE.RingGeometry;
+  private chargeRingMat: THREE.MeshBasicMaterial;
+  private chargeRingMesh: THREE.Mesh;
+  private chargeCoreGeo: THREE.RingGeometry;
+  private chargeCoreMat: THREE.MeshBasicMaterial;
+  private chargeCoreMesh: THREE.Mesh;
   private scene: THREE.Scene;
 
   constructor(
@@ -112,6 +151,37 @@ export class PlayerController {
     this.shadowMesh.rotation.x = -Math.PI * 0.5;
     this.shadowMesh.position.set(this.x, 0.03, 0);
     scene.add(this.shadowMesh);
+
+    // 3D HDR Charge Aura rings (blooms cleanly when channeling Sword or Shield magic)
+    this.chargeRingGeo = new THREE.RingGeometry(0.86, 1.06, 28);
+    this.chargeRingMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0x38bdf8).multiplyScalar(2.4),
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.chargeRingMesh = new THREE.Mesh(this.chargeRingGeo, this.chargeRingMat);
+    this.chargeRingMesh.visible = false;
+    this.chargeRingMesh.renderOrder = 8;
+
+    this.chargeCoreGeo = new THREE.RingGeometry(0.45, 0.62, 6);
+    this.chargeCoreMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(0xfef08a).multiplyScalar(2.6),
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.chargeCoreMesh = new THREE.Mesh(this.chargeCoreGeo, this.chargeCoreMat);
+    this.chargeCoreMesh.visible = false;
+    this.chargeCoreMesh.renderOrder = 8;
+
+    scene.add(this.chargeRingMesh, this.chargeCoreMesh);
   }
 
   public reset(): void {
@@ -131,12 +201,30 @@ export class PlayerController {
     this.lastSafeX = 3.5;
     this.lastSafeY = 0;
     this.attackStep = 0;
+    this.lastSlashStep = 0;
+    this.lastSlashMult = 1.0;
     this.attackTimer = 0;
     this.attackQueued = false;
+    this.comboGraceTimer = 0;
+    this.lastGroundStep = 0;
+    this.step4SecondHitFired = false;
     this.isAttackHitboxActive = false;
+    this.executionWindowTimer = 0;
+    this.executionWindowOpenedForAttackId = -1;
     this.isGuarding = false;
     this.parryWindowTimer = 0;
     this.parrySuccessTimer = 0;
+    this.attackCharge = 0;
+    this.guardCharge = 0;
+    this.attackHoldTime = 0;
+    this.guardHoldTime = 0;
+    this.attackChargeReadyPlayed = false;
+    this.guardChargeReadyPlayed = false;
+    this.chargePulseTimer = 0;
+    this.chargeSparkTimer = 0;
+    this.castPoseTimer = 0;
+    this.chargeRingMesh.visible = false;
+    this.chargeCoreMesh.visible = false;
     this.dashTimer = 0;
     this.dashCooldown = 0;
     this.invulnTimer = 0;
@@ -145,6 +233,12 @@ export class PlayerController {
     this.animator.setFacing(1);
     this.animator.setState('IDLE', true);
     this.animator.group.position.set(this.x, this.y, 0);
+    this.shadowMesh.position.set(this.x, 0.03, 0);
+  }
+
+  public syncVisuals(level: LevelBuilder): void {
+    this.animator.group.position.set(this.x, this.y, 0);
+    this.updateContactShadow(level);
   }
 
   public getHurtbox(): AABB {
@@ -158,28 +252,41 @@ export class PlayerController {
 
   public getAttackHitbox(): AABB | null {
     if (!this.isAttackHitboxActive || this.attackStep === 0) return null;
-    const isFinisher = this.attackStep === 3;
-    const reach = isFinisher ? 2.45 : this.attackStep === 2 ? 2.3 : 2.05;
-    const height = isFinisher ? 2.15 : 1.75;
+    const isFinisher = this.attackStep === 5;
+    const isHeavy = this.attackStep === 3 || this.attackStep === 4;
+    const reach = isFinisher ? 2.95 : isHeavy ? 2.5 : this.attackStep === 2 ? 2.3 : 2.08;
+    const height = isFinisher ? 2.45 : isHeavy ? 2.15 : 1.78;
     return {
       x: this.x + this.facing * (reach * 0.52 + 0.25),
-      y: this.y + (this.attackStep === 4 ? -0.15 : 0.1),
+      y: this.y + (this.attackStep === 6 ? -0.15 : 0.08),
       width: reach,
       height,
     };
   }
 
-  public getAttackDamage(): { damage: number; heavy: boolean; knockbackX: number } {
-    if (this.attackStep === 3) {
-      return { damage: 34, heavy: true, knockbackX: 11.5 };
-    }
-    if (this.attackStep === 2) {
-      return { damage: 20, heavy: false, knockbackX: 6.2 };
+  public getAttackDamage(): {
+    damage: number;
+    heavy: boolean;
+    knockbackX: number;
+    slashMult: number;
+  } {
+    if (this.attackStep === 5) {
+      return { damage: 48, heavy: true, knockbackX: 13.5, slashMult: 2.25 };
     }
     if (this.attackStep === 4) {
-      return { damage: 19, heavy: false, knockbackX: 5.5 };
+      // Twin Cross-Slash hits TWICE during one swing!
+      return { damage: 22, heavy: this.step4SecondHitFired, knockbackX: 7.4, slashMult: 1.7 };
     }
-    return { damage: 16, heavy: false, knockbackX: 5.0 };
+    if (this.attackStep === 3) {
+      return { damage: 30, heavy: true, knockbackX: 10.2, slashMult: 1.45 };
+    }
+    if (this.attackStep === 2) {
+      return { damage: 21, heavy: false, knockbackX: 6.2, slashMult: 1.2 };
+    }
+    if (this.attackStep === 6) {
+      return { damage: 22, heavy: false, knockbackX: 5.8, slashMult: 1.25 };
+    }
+    return { damage: 16, heavy: false, knockbackX: 5.0, slashMult: 1.0 };
   }
 
   public heal(amount: number): number {
@@ -219,9 +326,11 @@ export class PlayerController {
       return 'parried';
     }
 
+    const scaledAmount = Math.max(1, Math.round(amount * this.incomingDamageMult));
+
     // Standard GUARD
     if (this.isGuarding && attackFromFront && this.stamina >= 12) {
-      const chip = Math.max(2, Math.round(amount * 0.25));
+      const chip = Math.max(2, Math.round(scaledAmount * 0.25));
       this.hp = Math.max(1, this.hp - chip);
       this.stamina = Math.max(0, this.stamina - 18);
       this.vx = -this.facing * 5.2;
@@ -233,9 +342,17 @@ export class PlayerController {
       return 'guarded';
     }
 
-    // Direct Hit
-    this.hp = Math.max(0, this.hp - amount);
+    // Direct Hit (scaled by active Difficulty multiplier)
+    this.hp = Math.max(0, this.hp - scaledAmount);
     this.attackStep = 0;
+    this.lastGroundStep = 0;
+    this.comboGraceTimer = 0;
+    this.attackCharge = 0;
+    this.guardCharge = 0;
+    this.attackHoldTime = 0;
+    this.guardHoldTime = 0;
+    this.attackChargeReadyPlayed = false;
+    this.guardChargeReadyPlayed = false;
     this.isAttackHitboxActive = false;
     this.hurtTimer = 0.28;
     this.invulnTimer = 0.72;
@@ -248,10 +365,11 @@ export class PlayerController {
     this.animator.triggerSquash(0.84, 1.18);
     audio.playHurt();
     vfx.spawnBurst(this.x, this.y + 1.0, 0.15, 16, 0xf87171, 6.5, 18, 1.0);
-    vfx.spawnFloatingText(this.x, this.y + 0.3, `-${amount}`, '#f87171', 1.15);
+    vfx.spawnFloatingText(this.x, this.y + 0.3, `-${scaledAmount}`, '#f87171', 1.15);
 
     if (this.hp <= 0) {
       this.isDead = true;
+      this.executionWindowTimer = 0;
       this.animator.setState('DEAD', true);
     } else {
       this.animator.setState('HURT', true);
@@ -266,6 +384,7 @@ export class PlayerController {
     vfx: VfxManager,
     audio: ProceduralAudio,
     arenaLocked: boolean,
+    spellCallbacks?: PlayerSpellCallbacks,
   ): void {
     this.updateGhosts(dt);
 
@@ -290,6 +409,16 @@ export class PlayerController {
     if (this.dropThroughTimer > 0) this.dropThroughTimer = Math.max(0, this.dropThroughTimer - dt);
     if (this.parryWindowTimer > 0) this.parryWindowTimer = Math.max(0, this.parryWindowTimer - dt);
     if (this.parrySuccessTimer > 0) this.parrySuccessTimer = Math.max(0, this.parrySuccessTimer - dt);
+    if (this.castPoseTimer > 0) this.castPoseTimer = Math.max(0, this.castPoseTimer - dt);
+    if (this.executionWindowTimer > 0) {
+      this.executionWindowTimer = Math.max(0, this.executionWindowTimer - dt);
+    }
+    if (this.comboGraceTimer > 0) {
+      this.comboGraceTimer = Math.max(0, this.comboGraceTimer - dt);
+      if (this.comboGraceTimer === 0) {
+        this.lastGroundStep = 0;
+      }
+    }
 
     // Coyote time & jump buffer
     if (this.grounded) {
@@ -305,14 +434,45 @@ export class PlayerController {
       this.jumpBufferTimer = Math.max(0, this.jumpBufferTimer - dt);
     }
 
-    // Stamina regen (slower while guarding)
-    const regenRate = this.isGuarding ? 6 : 26;
+    // Stamina regen (slower while guarding or channeling)
+    const isChanneling = this.attackCharge > 0.05 || this.guardCharge > 0.05;
+    const regenRate = this.isGuarding || isChanneling ? 7 : 26;
     if (this.dashTimer <= 0 && this.attackStep === 0) {
       this.stamina = Math.min(this.maxStamina, this.stamina + regenRate * dt);
     }
 
     // Movement directional input
     const moveDir = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+
+    // 0. SCREEN-WIDE BIOME EXECUTION FINISHER (Extra input E / Q / Middle-Click after 3-Hit Combo)
+    if (
+      input.executeJustPressed &&
+      this.executionWindowTimer > 0 &&
+      this.hurtTimer <= 0 &&
+      !this.isDead
+    ) {
+      this.executionWindowTimer = 0;
+      this.attackStep = 0;
+      this.attackQueued = false;
+      this.lastGroundStep = 0;
+      this.comboGraceTimer = 0;
+      this.isAttackHitboxActive = false;
+      this.isGuarding = false;
+      this.attackCharge = 0;
+      this.guardCharge = 0;
+      this.attackHoldTime = 0;
+      this.guardHoldTime = 0;
+      this.attackChargeReadyPlayed = false;
+      this.guardChargeReadyPlayed = false;
+      this.dashTimer = 0;
+      this.invulnTimer = Math.max(this.invulnTimer, 1.3);
+      this.castPoseTimer = 0.72;
+      this.vx = 0;
+      this.vy = Math.max(0, this.vy);
+      this.animator.setState('ATTACK_3', true);
+      this.animator.triggerSquash(1.24, 0.84);
+      spellCallbacks?.onTriggerExecution?.();
+    }
 
     // 1. DASH (L / Shift)
     if (
@@ -330,6 +490,12 @@ export class PlayerController {
       this.attackStep = 0;
       this.isAttackHitboxActive = false;
       this.isGuarding = false;
+      this.attackCharge = 0;
+      this.guardCharge = 0;
+      this.attackHoldTime = 0;
+      this.guardHoldTime = 0;
+      this.attackChargeReadyPlayed = false;
+      this.guardChargeReadyPlayed = false;
       this.vy = 0;
       this.vx = this.facing * 20.5;
       this.dashGhostTimer = 0;
@@ -338,11 +504,14 @@ export class PlayerController {
       vfx.spawnDustPuff(this.x, this.y, 7);
     }
 
-    // 2. GUARD & PERFECT PARRY (K / Right Click)
+    // 2. GUARD, PERFECT PARRY & CONCENTRATED AEGIS NOVA (Hold K / Right Click & Release)
     if (input.guardJustPressed && this.hurtTimer <= 0 && this.dashTimer <= 0) {
       this.parryWindowTimer = 0.19; // Crisp 190ms Perfect Parry window
       this.attackStep = 0;
       this.isAttackHitboxActive = false;
+      this.attackCharge = 0;
+      this.attackHoldTime = 0;
+      this.attackChargeReadyPlayed = false;
     }
     this.isGuarding =
       input.guardHeld &&
@@ -351,35 +520,152 @@ export class PlayerController {
       this.attackStep === 0 &&
       this.grounded;
 
-    // 3. ATTACK COMBO (J / Left Click)
+    if (this.isGuarding && this.stamina >= 10) {
+      this.guardHoldTime += dt;
+      if (this.guardHoldTime >= 0.26) {
+        this.guardCharge = THREE.MathUtils.clamp((this.guardHoldTime - 0.26) / 0.68, 0, 1);
+        this.chargePulseTimer -= dt;
+        if (this.chargePulseTimer <= 0 && this.guardCharge < 0.99) {
+          this.chargePulseTimer = 0.17;
+          audio.playChargePulse(this.guardCharge, 'guard');
+        }
+        if (this.guardCharge >= 0.99 && !this.guardChargeReadyPlayed) {
+          this.guardChargeReadyPlayed = true;
+          audio.playChargeReady('guard');
+          vfx.spawnRing(this.x, this.y + 1.05, 0xfde047, 0.35, 2.2, 0.25);
+          vfx.flashLight(this.x, this.y + 1.1, 0xc084fc, 8, 0.18);
+        }
+      }
+    } else if (this.guardCharge > 0 || this.guardHoldTime > 0) {
+      const released = input.guardJustReleased || !input.guardHeld;
+      if (
+        released &&
+        this.guardCharge >= 0.42 &&
+        this.hurtTimer <= 0 &&
+        this.dashTimer <= 0 &&
+        this.stamina >= 18
+      ) {
+        this.stamina = Math.max(0, this.stamina - 18);
+        this.parrySuccessTimer = 0.26;
+        this.animator.setState('PARRY', true);
+        this.animator.triggerSquash(1.2, 0.86);
+        spellCallbacks?.onCastAegisNova?.(this.guardCharge);
+      }
+      this.guardHoldTime = 0;
+      this.guardCharge = 0;
+      this.guardChargeReadyPlayed = false;
+    }
+
+    // 3. 5-HIT ESCALATING COMBO & CONCENTRATED AETHER WAVE (Hold J / Left Click & Release)
     if (input.attackJustPressed && this.hurtTimer <= 0 && this.dashTimer <= 0) {
       if (this.attackStep === 0) {
         if (!this.grounded) {
-          this.startAttack(4, vfx, audio);
+          this.startAttack(6, vfx, audio);
+        } else if (this.comboGraceTimer > 0 && this.lastGroundStep > 0 && this.lastGroundStep < 5) {
+          const nextStep = (this.lastGroundStep + 1) as 2 | 3 | 4 | 5;
+          if (moveDir !== 0) this.facing = moveDir > 0 ? 1 : -1;
+          this.startAttack(nextStep, vfx, audio);
         } else {
           this.startAttack(1, vfx, audio);
         }
-      } else if (this.attackStep === 1 || this.attackStep === 2) {
-        // Queue next combo hit during cancel window
-        if (this.attackTimer > this.attackDuration * 0.3) {
+      } else if (this.attackStep >= 1 && this.attackStep <= 4) {
+        // Queue next slash in the 5-hit escalating combo during generous cancel window
+        if (this.attackTimer > this.attackDuration * 0.26) {
           this.attackQueued = true;
         }
       }
+    }
+
+    // Channel concentrated Sword magic while Attack button is held past initial tap
+    if (input.attackHeld && !this.isGuarding && this.hurtTimer <= 0 && this.dashTimer <= 0) {
+      this.attackHoldTime += dt;
+      if (this.attackHoldTime >= 0.24) {
+        this.attackCharge = THREE.MathUtils.clamp((this.attackHoldTime - 0.24) / 0.64, 0, 1);
+        this.chargePulseTimer -= dt;
+        if (this.chargePulseTimer <= 0 && this.attackCharge < 0.99) {
+          this.chargePulseTimer = 0.16;
+          audio.playChargePulse(this.attackCharge, 'attack');
+        }
+        if (this.attackCharge >= 0.99 && !this.attackChargeReadyPlayed) {
+          this.attackChargeReadyPlayed = true;
+          audio.playChargeReady('attack');
+          vfx.spawnRing(this.x, this.y + 1.05, 0xfde047, 0.35, 2.3, 0.26);
+          vfx.flashLight(this.x, this.y + 1.1, 0x38bdf8, 8.5, 0.18);
+        }
+      }
+    } else if (this.attackCharge > 0 || this.attackHoldTime > 0) {
+      const released = input.attackJustReleased || !input.attackHeld;
+      if (
+        released &&
+        this.attackCharge >= 0.4 &&
+        this.hurtTimer <= 0 &&
+        this.dashTimer <= 0 &&
+        this.stamina >= 16
+      ) {
+        const cost = this.attackCharge >= 0.95 ? 22 : 16;
+        this.stamina = Math.max(0, this.stamina - cost);
+        if (moveDir !== 0) this.facing = moveDir > 0 ? 1 : -1;
+        this.attackStep = 0;
+        this.isAttackHitboxActive = false;
+        this.castPoseTimer = 0.22;
+        this.vx = -this.facing * 2.8; // Crisp spellcast recoil
+        this.animator.setState('ATTACK_3', true);
+        this.animator.triggerSquash(1.18, 0.88);
+        spellCallbacks?.onCastAetherWave?.(this.attackCharge);
+      }
+      this.attackHoldTime = 0;
+      this.attackCharge = 0;
+      this.attackChargeReadyPlayed = false;
     }
 
     // Advance active attack timers & active hitbox window
     if (this.attackStep > 0) {
       this.attackTimer += dt;
       const t = this.attackTimer / this.attackDuration;
-      // Active hitbox ONLY during impact frames (0.24..0.68 of clip)
-      this.isAttackHitboxActive = t >= 0.22 && t <= 0.68;
+
+      // Step 4 (Twin Cross-Slash) triggers a second mid-swing hit instance & dual arc!
+      if (this.attackStep === 4 && !this.step4SecondHitFired && t >= 0.48) {
+        this.step4SecondHitFired = true;
+        this.attackInstanceId++;
+        audio.playSlash(4);
+        vfx.spawnSlashArc(this.x, this.y, this.facing, 3, 0xe879f9);
+        vfx.flashLight(this.x + this.facing * 1.15, this.y + 1.1, 0xe879f9, 8.5, 0.14);
+        this.animator.triggerSquash(1.14, 0.9);
+      }
+
+      // Active hitbox ONLY during impact frames
+      this.isAttackHitboxActive =
+        this.attackStep === 4 ? t >= 0.18 && t <= 0.82 : t >= 0.22 && t <= 0.68;
+
+      // Completing the 3-hit combo (step 3, refreshed on steps 4-5) opens the Execution Finisher window!
+      if (
+        this.attackStep >= 3 &&
+        this.attackStep <= 5 &&
+        t >= 0.5 &&
+        this.executionWindowOpenedForAttackId !== this.attackInstanceId
+      ) {
+        const wasAlreadyReady = this.executionWindowTimer > 0;
+        this.executionWindowOpenedForAttackId = this.attackInstanceId;
+        this.executionWindowTimer = PlayerController.EXECUTION_WINDOW_MAX;
+        if (!wasAlreadyReady) {
+          audio.playExecutionReady();
+          vfx.spawnRing(this.x, this.y + 1.05, 0xfef08a, 0.35, 2.15, 0.26);
+        }
+      }
 
       if (this.attackTimer >= this.attackDuration) {
-        if (this.attackQueued && this.grounded && this.attackStep < 3) {
-          const nextStep = (this.attackStep + 1) as 2 | 3;
+        if (this.attackQueued && this.grounded && this.attackStep >= 1 && this.attackStep <= 4) {
+          const nextStep = (this.attackStep + 1) as 2 | 3 | 4 | 5;
           if (moveDir !== 0) this.facing = moveDir > 0 ? 1 : -1;
           this.startAttack(nextStep, vfx, audio);
         } else {
+          if (this.attackStep >= 1 && this.attackStep <= 4 && this.grounded) {
+            this.lastGroundStep = this.attackStep as 1 | 2 | 3 | 4;
+            this.comboGraceTimer = 0.24;
+          } else {
+            this.lastGroundStep = 0;
+            this.comboGraceTimer = 0;
+          }
           this.attackStep = 0;
           this.attackQueued = false;
           this.isAttackHitboxActive = false;
@@ -412,7 +698,8 @@ export class PlayerController {
       // Subtle forward momentum step on combo attacks
       this.vx *= Math.max(0, 1 - 12 * dt);
     } else {
-      const targetSpeed = moveDir * 9.4;
+      const chargeSpeedScale = this.attackCharge > 0.05 ? 0.64 : 1.0;
+      const targetSpeed = moveDir * 9.4 * chargeSpeedScale;
       const accel = this.grounded ? 62 : 36;
       if (moveDir !== 0) {
         this.facing = moveDir > 0 ? 1 : -1;
@@ -556,13 +843,17 @@ export class PlayerController {
       this.animator.setState('HURT');
     } else if (this.parrySuccessTimer > 0) {
       this.animator.setState('PARRY');
+    } else if (this.castPoseTimer > 0) {
+      this.animator.setState('ATTACK_3');
     } else if (this.attackStep === 1) {
       this.animator.setState('ATTACK_1');
     } else if (this.attackStep === 2) {
       this.animator.setState('ATTACK_2');
-    } else if (this.attackStep === 3) {
+    } else if (this.attackStep === 3 || this.attackStep === 5) {
       this.animator.setState('ATTACK_3');
     } else if (this.attackStep === 4) {
+      this.animator.setState(this.step4SecondHitFired ? 'ATTACK_1' : 'ATTACK_2');
+    } else if (this.attackStep === 6) {
       this.animator.setState('AIR_ATTACK');
     } else if (this.isGuarding) {
       this.animator.setState('GUARD');
@@ -574,53 +865,139 @@ export class PlayerController {
       this.animator.setState('IDLE');
     }
 
-    // Blink during post-hit invulnerability (not during dash)
+    // Blink during post-hit invulnerability (not during dash or Execution pose)
     const blinkHide =
       this.invulnTimer > 0 &&
       this.dashTimer <= 0 &&
       this.parrySuccessTimer <= 0 &&
+      this.castPoseTimer <= 0 &&
       Math.floor(this.invulnTimer * 22) % 2 === 0;
 
     this.animator.group.position.set(this.x, this.y, 0);
     this.animator.update(dt, blinkHide);
     this.updateContactShadow(level);
+    this.updateChargeVisuals(dt, vfx);
   }
 
-  private startAttack(step: 1 | 2 | 3 | 4, vfx: VfxManager, audio: ProceduralAudio): void {
-    this.attackStep = step;
-    this.attackTimer = 0;
-    this.attackQueued = false;
-    this.attackInstanceId++;
-    this.attackDuration = step === 3 ? 0.34 : step === 2 ? 0.25 : step === 4 ? 0.26 : 0.24;
+  private updateChargeVisuals(dt: number, vfx: VfxManager): void {
+    const activeKind: 'attack' | 'guard' | null =
+      this.attackCharge > 0.04 ? 'attack' : this.guardCharge > 0.04 ? 'guard' : null;
+    const lvl = activeKind === 'attack' ? this.attackCharge : this.guardCharge;
 
-    if (this.grounded) {
-      this.vx = this.facing * (step === 3 ? 7.5 : 4.2);
+    if (!activeKind) {
+      this.chargeRingMesh.visible = false;
+      this.chargeCoreMesh.visible = false;
+      return;
     }
 
-    const animMap: Record<1 | 2 | 3 | 4, 'ATTACK_1' | 'ATTACK_2' | 'ATTACK_3' | 'AIR_ATTACK'> = {
+    const full = lvl >= 0.95;
+    this.chargeAuraSpin += dt * (full ? 7.5 : 3.8);
+    const pulse = 1 + Math.sin(this.chargeAuraSpin * 2.4) * (full ? 0.14 : 0.06);
+    const ringScale = (0.58 + lvl * 0.68) * pulse;
+    const baseHex =
+      activeKind === 'attack' ? (full ? 0xfacc15 : 0x38bdf8) : full ? 0xfacc15 : 0xc084fc;
+    const coreHex =
+      activeKind === 'attack' ? (full ? 0x7dd3fc : 0xfef08a) : full ? 0xe879f9 : 0xf5d0fe;
+
+    this.chargeRingMesh.visible = true;
+    this.chargeRingMesh.position.set(this.x, this.y + 1.05, 0.26);
+    this.chargeRingMesh.scale.setScalar(ringScale);
+    this.chargeRingMesh.rotation.z = this.chargeAuraSpin;
+    this.chargeRingMat.color.setHex(baseHex).multiplyScalar(full ? 3.1 : 2.3);
+    this.chargeRingMat.opacity = 0.25 + lvl * 0.65;
+
+    this.chargeCoreMesh.visible = true;
+    this.chargeCoreMesh.position.set(this.x, this.y + 1.05, 0.28);
+    this.chargeCoreMesh.scale.setScalar(ringScale * 0.72);
+    this.chargeCoreMesh.rotation.z = -this.chargeAuraSpin * 1.45;
+    this.chargeCoreMat.color.setHex(coreHex).multiplyScalar(full ? 3.2 : 2.4);
+    this.chargeCoreMat.opacity = 0.2 + lvl * 0.6;
+
+    // Emit rising arcane charge motes around the hero
+    this.chargeSparkTimer -= dt;
+    if (this.chargeSparkTimer <= 0) {
+      this.chargeSparkTimer = full ? 0.075 : 0.12;
+      vfx.spawnBurst(
+        this.x + (Math.random() - 0.5) * 0.9,
+        this.y + 0.4 + Math.random() * 0.9,
+        0.22,
+        full ? 3 : 2,
+        baseHex,
+        2.4,
+        -6, // negative gravity -> rising arcane sparks!
+        full ? 0.78 : 0.58,
+      );
+    }
+  }
+
+  private startAttack(
+    step: 1 | 2 | 3 | 4 | 5 | 6,
+    vfx: VfxManager,
+    audio: ProceduralAudio,
+  ): void {
+    this.attackStep = step;
+    this.lastSlashStep = step;
+    this.attackTimer = 0;
+    this.attackQueued = false;
+    this.comboGraceTimer = 0;
+    this.step4SecondHitFired = false;
+    this.attackInstanceId++;
+    this.attackDuration =
+      step === 5
+        ? 0.38
+        : step === 4
+          ? 0.34
+          : step === 3
+            ? 0.3
+            : step === 6
+              ? 0.26
+              : step === 2
+                ? 0.24
+                : 0.23;
+
+    this.lastSlashMult = this.getAttackDamage().slashMult;
+
+    if (this.grounded) {
+      const lunge =
+        step === 5 ? 9.4 : step === 4 ? 7.2 : step === 3 ? 6.8 : step === 2 ? 4.8 : 4.1;
+      this.vx = this.facing * lunge;
+    }
+
+    const animMap: Record<
+      1 | 2 | 3 | 4 | 5 | 6,
+      'ATTACK_1' | 'ATTACK_2' | 'ATTACK_3' | 'AIR_ATTACK'
+    > = {
       1: 'ATTACK_1',
       2: 'ATTACK_2',
       3: 'ATTACK_3',
-      4: 'AIR_ATTACK',
+      4: 'ATTACK_2',
+      5: 'ATTACK_3',
+      6: 'AIR_ATTACK',
     };
     this.animator.setState(animMap[step], true);
-    this.animator.triggerSquash(step === 3 ? 1.18 : 1.09, step === 3 ? 0.88 : 0.94);
+    this.animator.triggerSquash(
+      step === 5 ? 1.26 : step === 3 || step === 4 ? 1.16 : 1.09,
+      step === 5 ? 0.82 : step === 3 || step === 4 ? 0.88 : 0.94,
+    );
+
+    const slashColor =
+      step === 5 ? 0xfacc15 : step === 4 ? 0x38bdf8 : step === 3 ? 0x38bdf8 : 0x7dd3fc;
 
     audio.playSlash(step);
-    vfx.spawnSlashArc(
-      this.x,
-      this.y,
-      this.facing,
-      step,
-      step === 3 ? 0x38bdf8 : 0x7dd3fc,
-    );
+    vfx.spawnSlashArc(this.x, this.y, this.facing, step, slashColor);
     vfx.flashLight(
-      this.x + this.facing * 1.1,
+      this.x + this.facing * 1.15,
       this.y + 1.1,
-      step === 3 ? 0x38bdf8 : 0x7dd3fc,
-      step === 3 ? 8.5 : 5.2,
-      0.14,
+      slashColor,
+      step === 5 ? 12.5 : step === 3 || step === 4 ? 8.5 : 5.2,
+      step === 5 ? 0.22 : 0.14,
     );
+
+    if (step === 5) {
+      // Aether Finisher explosive shockwave ring & golden-cyan sparks
+      vfx.spawnRing(this.x + this.facing * 1.15, this.y + 1.05, 0xfacc15, 0.35, 3.1, 0.28);
+      vfx.spawnBurst(this.x + this.facing * 1.2, this.y + 1.1, 0.2, 18, 0xfde047, 8.2, 12, 1.05);
+    }
   }
 
   private updateContactShadow(level: LevelBuilder): void {
@@ -673,9 +1050,14 @@ export class PlayerController {
     this.clearGhosts();
     this.scene.remove(this.animator.group);
     this.scene.remove(this.shadowMesh);
+    this.scene.remove(this.chargeRingMesh, this.chargeCoreMesh);
     this.animator.dispose();
     this.shadowGeo.dispose();
     this.shadowMat.dispose();
     this.shadowTex.dispose();
+    this.chargeRingGeo.dispose();
+    this.chargeRingMat.dispose();
+    this.chargeCoreGeo.dispose();
+    this.chargeCoreMat.dispose();
   }
 }

@@ -2,12 +2,19 @@
 
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { GameEngine } from '../game/GameEngine';
-import { BIOME_PALETTES, BiomeId, HudSnapshot } from '../game/types';
+import {
+  BIOME_EXECUTION_META,
+  BiomeId,
+  DifficultyId,
+  HudSnapshot,
+} from '../game/types';
+import { BIOME_ROSTERS } from '../game/BiomeRoster';
 import { GameHUD } from './GameHUD';
 
 const INITIAL_HUD: HudSnapshot = {
   phase: 'title',
   biome: 'deep-forest',
+  difficulty: 'knight',
   hp: 100,
   maxHp: 100,
   stamina: 100,
@@ -16,6 +23,20 @@ const INITIAL_HUD: HudSnapshot = {
   highScore: 0,
   combo: 0,
   comboTimer: 0,
+  comboMultiplier: 1.0,
+  slashStep: 0,
+  slashMultiplier: 1.0,
+  attackCharge: 0,
+  guardCharge: 0,
+  execution: {
+    ready: false,
+    windowTimer: 0,
+    active: false,
+    activeProgress: 0,
+    moveName: BIOME_EXECUTION_META['deep-forest'].name,
+    subtitle: BIOME_EXECUTION_META['deep-forest'].subtitle,
+    accent: BIOME_EXECUTION_META['deep-forest'].accent,
+  },
   progress: 0,
   zone: 1,
   enemiesDefeated: 0,
@@ -25,13 +46,27 @@ const INITIAL_HUD: HudSnapshot = {
   shaderMode: 'hd2d',
   boss: {
     active: false,
-    name: BIOME_PALETTES['deep-forest'].bossName,
-    title: BIOME_PALETTES['deep-forest'].bossTitle,
-    hp: 440,
-    maxHp: 440,
+    introActive: false,
+    name: BIOME_ROSTERS['deep-forest'].boss.name,
+    title: BIOME_ROSTERS['deep-forest'].boss.title,
+    accent: BIOME_ROSTERS['deep-forest'].boss.accentCss,
+    hp: BIOME_ROSTERS['deep-forest'].boss.maxHp,
+    maxHp: BIOME_ROSTERS['deep-forest'].boss.maxHp,
     phase: 1,
   },
+  transition: {
+    stage: 'none',
+    fadeAlpha: 0,
+    timeScale: 1,
+    fromBiome: 'deep-forest',
+    toBiome: 'green-hills',
+    areaIndex: 1,
+    totalAreas: 6,
+    isCampaignComplete: false,
+    performance: null,
+  },
   floatingTexts: [],
+  offscreenEnemies: [],
   spriteSource: 'procedural',
 };
 
@@ -84,6 +119,14 @@ export const GameCanvas: React.FC = () => {
     engineRef.current?.selectBiome(biome);
   }, []);
 
+  const handleSelectDifficulty = useCallback((difficulty: DifficultyId) => {
+    engineRef.current?.selectDifficulty(difficulty);
+  }, []);
+
+  const handleAdvanceNextArea = useCallback((targetBiome?: BiomeId) => {
+    engineRef.current?.advanceToNextArea(targetBiome);
+  }, []);
+
   const handleToggleMute = useCallback(() => {
     engineRef.current?.toggleMute();
   }, []);
@@ -123,6 +166,8 @@ export const GameCanvas: React.FC = () => {
         onPause={handlePause}
         onReturnTitle={handleReturnTitle}
         onSelectBiome={handleSelectBiome}
+        onSelectDifficulty={handleSelectDifficulty}
+        onAdvanceNextArea={handleAdvanceNextArea}
         onToggleMute={handleToggleMute}
         onToggleDebug={handleToggleDebug}
         onCycleShaderMode={handleCycleShaderMode}

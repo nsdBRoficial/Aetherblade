@@ -273,8 +273,8 @@ function buildNormalizedAtlasFromAttached(img: HTMLImageElement): THREE.CanvasTe
   texture.colorSpace = THREE.SRGBColorSpace;
   texture.wrapS = THREE.ClampToEdgeWrapping;
   texture.wrapT = THREE.ClampToEdgeWrapping;
-  texture.magFilter = THREE.LinearFilter;
-  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.NearestFilter;
+  texture.minFilter = THREE.NearestFilter;
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
   return texture;
@@ -593,9 +593,9 @@ export class SpriteAnimator {
     this.material = new THREE.MeshBasicMaterial({
       map: this.texture,
       transparent: true,
-      alphaTest: 0.15,
+      alphaTest: 0.18,
       side: THREE.DoubleSide,
-      depthWrite: false,
+      depthWrite: true,
     });
 
     this.mesh = new THREE.Mesh(this.geometry, this.material);
@@ -641,8 +641,8 @@ export class SpriteAnimator {
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.wrapS = THREE.ClampToEdgeWrapping;
       tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.magFilter = THREE.LinearFilter;
-      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.NearestFilter;
+      tex.minFilter = THREE.NearestFilter;
       tex.generateMipmaps = false;
       tex.needsUpdate = true;
       this.swapTexture(tex, cols, rows, 'custom');
@@ -755,12 +755,13 @@ export class SpriteAnimator {
     clonedTex.offset.copy(this.texture.offset);
     const mat = new THREE.MeshBasicMaterial({
       map: clonedTex,
-      color: 0x38bdf8,
+      color: new THREE.Color(0x38bdf8).multiplyScalar(1.6),
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.58,
       alphaTest: 0.12,
       side: THREE.DoubleSide,
       depthWrite: false,
+      toneMapped: false,
     });
     const ghost = new THREE.Mesh(this.geometry, mat);
     ghost.position.set(worldX, worldY + this.baseScaleY * 0.5 - 0.08, -0.05);

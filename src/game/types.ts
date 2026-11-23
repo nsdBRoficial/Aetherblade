@@ -94,16 +94,193 @@ export interface FloatingDamageText {
 
 export interface BossHudState {
   active: boolean;
+  introActive: boolean;
   name: string;
   title: string;
   hp: number;
   maxHp: number;
   phase: 1 | 2;
+  accent: string;
 }
+
+export type StageTransitionStage =
+  | 'none'
+  | 'celebrate'
+  | 'intermission'
+  | 'departing'
+  | 'arriving';
+
+export type PerformanceRank = 'S' | 'A' | 'B' | 'C';
+
+export interface VictoryPerformanceSummary {
+  clearTimeSeconds: number;
+  maxCombo: number;
+  enemiesDefeated: number;
+  parriesCount: number;
+  hpRemainingPct: number;
+  damageTakenHits: number;
+  clearBonus: number;
+  rank: PerformanceRank;
+  rankTitle: string;
+}
+
+export interface StageTransitionState {
+  stage: StageTransitionStage;
+  fadeAlpha: number; // 0..1 smooth cross-map cinema curtain
+  timeScale: number; // 0.22..1.0 dramatic slow-motion dilation during boss death zoom-out
+  fromBiome: BiomeId;
+  toBiome: BiomeId;
+  areaIndex: number; // 1-based index of current/incoming area
+  totalAreas: number;
+  isCampaignComplete: boolean;
+  performance: VictoryPerformanceSummary | null;
+}
+
+export interface OffscreenEnemyIndicator {
+  id: number;
+  type: EnemyType;
+  label: string;
+  accent: string;
+  side: 'left' | 'right';
+  screenY: number;
+  distance: number;
+  urgency: number; // 0..1 proximity & aggro urgency
+  aggro: boolean;
+}
+
+export type DifficultyId = 'story' | 'knight' | 'hunter' | 'nightmare';
+
+export interface DifficultyConfig {
+  id: DifficultyId;
+  name: string;
+  subtitle: string;
+  playerDamageMult: number;
+  enemyAggression: number;
+  enemyCooldownMult: number;
+  scoreMult: number;
+  accent: string;
+}
+
+export const DIFFICULTY_ORDER: DifficultyId[] = ['story', 'knight', 'hunter', 'nightmare'];
+
+export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyConfig> = {
+  story: {
+    id: 'story',
+    name: 'Story',
+    subtitle: 'Forgiving hits & calmer foes',
+    playerDamageMult: 0.65,
+    enemyAggression: 0.78,
+    enemyCooldownMult: 1.28,
+    scoreMult: 0.85,
+    accent: '#34d399',
+  },
+  knight: {
+    id: 'knight',
+    name: 'Knight',
+    subtitle: 'Balanced classic challenge',
+    playerDamageMult: 1.0,
+    enemyAggression: 1.0,
+    enemyCooldownMult: 1.0,
+    scoreMult: 1.0,
+    accent: '#38bdf8',
+  },
+  hunter: {
+    id: 'hunter',
+    name: 'Hunter',
+    subtitle: 'Fierce foes & punishing hits',
+    playerDamageMult: 1.35,
+    enemyAggression: 1.22,
+    enemyCooldownMult: 0.76,
+    scoreMult: 1.25,
+    accent: '#fb923c',
+  },
+  nightmare: {
+    id: 'nightmare',
+    name: 'Nightmare',
+    subtitle: 'Relentless aggression & lethal blows',
+    playerDamageMult: 1.75,
+    enemyAggression: 1.38,
+    enemyCooldownMult: 0.58,
+    scoreMult: 1.6,
+    accent: '#f43f5e',
+  },
+};
+
+export function getComboDamageMultiplier(combo: number): { mult: number; tierLabel: string } {
+  if (combo >= 35) return { mult: 2.4, tierLabel: 'OVERDRIVE' };
+  if (combo >= 20) return { mult: 1.95, tierLabel: 'AETHERLORD' };
+  if (combo >= 10) return { mult: 1.55, tierLabel: 'RELENTLESS' };
+  if (combo >= 5) return { mult: 1.25, tierLabel: 'FURY' };
+  return { mult: 1.0, tierLabel: 'CHAIN' };
+}
+
+export interface ExecutionHudState {
+  ready: boolean;
+  windowTimer: number; // 0..1 remaining execution trigger window
+  active: boolean;
+  activeProgress: number; // 0..1 elapsed progress during Execution sequence
+  moveName: string;
+  subtitle: string;
+  accent: string;
+}
+
+export interface BiomeExecutionMeta {
+  name: string;
+  subtitle: string;
+  primaryHex: number;
+  secondaryHex: number;
+  accent: string;
+}
+
+export const BIOME_EXECUTION_META: Record<BiomeId, BiomeExecutionMeta> = {
+  'deep-forest': {
+    name: 'Emerald Thornstorm',
+    subtitle: 'Canopy Vortex & Briar Lances',
+    primaryHex: 0x34d399,
+    secondaryHex: 0xa7f3d0,
+    accent: '#34d399',
+  },
+  'green-hills': {
+    name: 'Sakura Tempest',
+    subtitle: 'Blossom Cyclone & Sunburst',
+    primaryHex: 0xf472b6,
+    secondaryHex: 0xfde047,
+    accent: '#f472b6',
+  },
+  'hare-canyon': {
+    name: 'Crimson Meteorfall',
+    subtitle: 'Volcanic Barrage & Cinder Quake',
+    primaryHex: 0xf97316,
+    secondaryHex: 0xfef08a,
+    accent: '#fb923c',
+  },
+  'bamboo-forest': {
+    name: 'Jade Judgement',
+    subtitle: 'Dimensional Cross-Cuts',
+    primaryHex: 0xa3e635,
+    secondaryHex: 0xfef08a,
+    accent: '#a3e635',
+  },
+  winter: {
+    name: 'Glacial Shatter',
+    subtitle: 'Cryo Spires & Diamond Burst',
+    primaryHex: 0x38bdf8,
+    secondaryHex: 0xe0f2fe,
+    accent: '#38bdf8',
+  },
+  'wheat-field': {
+    name: 'Solaris Harvest',
+    subtitle: 'Dawn Scythes & Golden Halo',
+    primaryHex: 0xfacc15,
+    secondaryHex: 0xfffbeb,
+    accent: '#facc15',
+  },
+};
 
 export interface HudSnapshot {
   phase: GamePhase;
   biome: BiomeId;
+  difficulty: DifficultyId;
   hp: number;
   maxHp: number;
   stamina: number;
@@ -112,6 +289,12 @@ export interface HudSnapshot {
   highScore: number;
   combo: number;
   comboTimer: number; // 0..1 normalized
+  comboMultiplier: number;
+  slashStep: number;
+  slashMultiplier: number;
+  attackCharge: number; // 0..1 concentrated sword magic charge
+  guardCharge: number; // 0..1 concentrated shield magic charge
+  execution: ExecutionHudState;
   progress: number; // 0..1 along X=0..180
   zone: 1 | 2 | 3 | 4;
   enemiesDefeated: number;
@@ -120,9 +303,20 @@ export interface HudSnapshot {
   debugHitboxes: boolean;
   shaderMode: ShaderStyleMode;
   boss: BossHudState;
+  transition: StageTransitionState;
   floatingTexts: FloatingDamageText[];
+  offscreenEnemies: OffscreenEnemyIndicator[];
   spriteSource: 'attached' | 'custom' | 'procedural';
 }
+
+export const BIOME_ORDER: BiomeId[] = [
+  'deep-forest',
+  'green-hills',
+  'hare-canyon',
+  'bamboo-forest',
+  'winter',
+  'wheat-field',
+];
 
 export const LEVEL_LENGTH = 180;
 export const BOSS_TRIGGER_X = 148;
