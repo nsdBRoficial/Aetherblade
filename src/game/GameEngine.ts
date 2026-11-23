@@ -76,11 +76,23 @@ function detectSoftwareGl(): boolean {
   }
 }
 
+function detectMobileDevice(): boolean {
+  if (typeof window === 'undefined') return false;
+  const coarsePointer =
+    typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  const touchPoints = typeof navigator !== 'undefined' ? navigator.maxTouchPoints || 0 : 0;
+  const mobileUa =
+    typeof navigator !== 'undefined' &&
+    /Android|iPhone|iPad|iPod|Mobile|Tablet/i.test(navigator.userAgent);
+  return coarsePointer || mobileUa || (touchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) <= 900);
+}
+
 export class GameEngine {
   private container: HTMLElement;
   private onHudUpdate: (snapshot: HudSnapshot) => void;
 
   private isSoftwareGl: boolean;
+  public readonly isMobile: boolean;
   private renderer: THREE.WebGLRenderer;
   private scene: THREE.Scene;
   private camera: THREE.PerspectiveCamera;
@@ -156,6 +168,12 @@ export class GameEngine {
   private keysHeld = new Set<string>();
   private mouseLeftHeld = false;
   private mouseRightHeld = false;
+  private touchLeft = false;
+  private touchRight = false;
+  private touchDown = false;
+  private touchJumpHeld = false;
+  private touchAttackHeld = false;
+  private touchGuardHeld = false;
   private queuedJump = false;
   private queuedAttack = false;
   private queuedAttackRelease = false;
@@ -163,11 +181,13 @@ export class GameEngine {
   private queuedGuardRelease = false;
   private queuedDash = false;
   private queuedExecute = false;
+  private queuedQuickSpell: 'wave' | 'nova' | null = null;
 
   constructor(container: HTMLElement, onHudUpdate: (snapshot: HudSnapshot) => void) {
     this.container = container;
     this.onHudUpdate = onHudUpdate;
     this.isSoftwareGl = detectSoftwareGl();
+    this.isMobile = detectMobileDevice();
 
     // Load saved high score & difficulty safely
     try {
@@ -184,21 +204,23 @@ export class GameEngine {
     const width = Math.max(1, container.clientWidth);
     const height = Math.max(1, container.clientHeight);
 
-    // Renderer configured per Three.js studio PBR & software-WebGL guidelines
+    // Renderer configured per Three.js studio PBR & mobile GPU bandwidth guidelines
     this.renderer = new THREE.WebGLRenderer({
-      antialias: !this.isSoftwareGl,
+      antialias: !this.isSoftwareGl && !this.isMobile,
       powerPreference: 'high-performance',
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
-    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    const maxDpr = this.isMobile ? 1.35 : 2;
+    this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, maxDpr));
     this.renderer.setSize(width, height);
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = this.isMobile ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
     this.renderer.domElement.style.display = 'block';
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
+    this.renderer.domElement.style.touchAction = 'none';
     container.appendChild(this.renderer.domElement);
 
     // Scene & Studio Environment Map (PMREM RoomEnvironment)
@@ -209,7 +231,7 @@ export class GameEngine {
     pmrem.dispose();
 
     // 2.5D Low-FOV PerspectiveCamera at Z = 20 looking at Z = 0
-    this.camera = new THREE.PerspectiveCamera(34, width / height, 0.5, 160);
+    this.camera = new THREE.PerspectiveCamera(this.computeCameraFov(width, height), width / height, 0.5, 160);
     this.camera.position.set(6, 3.3, 20);
     this.camera.lookAt(6, 2.3, 0);
 
@@ -223,7 +245,8 @@ export class GameEngine {
     this.dirLight = new THREE.DirectionalLight(pal.sunColor, pal.sunIntensity);
     this.dirLight.position.set(16, 26, 14);
     this.dirLight.castShadow = !this.isSoftwareGl;
-    this.dirLight.shadow.mapSize.set(1024, 1024);
+    const shadowRes = this.isMobile ? 512 : 1024;
+    this.dirLight.shadow.mapSize.set(shadowRes, shadowRes);
     this.dirLight.shadow.camera.near = 2;
     this.dirLight.shadow.camera.far = 65;
     this.dirLight.shadow.camera.left = -22;
@@ -244,10 +267,10 @@ export class GameEngine {
 
     // Instantiate core game subsystems
     this.audio = new ProceduralAudio();
-    this.vfx = new VfxManager(this.scene, pal);
+    this.vfx = new VfxManager(this.scene, pal, this.isMobile);
     this.level = new LevelBuilder(
       this.biome,
-      this.renderer.capabilities.getMaxAnisotropy(),
+      this.isMobile ? Math.min(2, this.renderer.capabilities.getMaxAnisotropy()) : this.renderer.capabilities.getMaxAnisotropy(),
       this.isSoftwareGl,
     );
     this.scene.add(this.level.root);
@@ -267,7 +290,7 @@ export class GameEngine {
     this.enemies.spawnStageWave();
 
     // Full-scene post-processing pass: biome color grading + 4x4 Bayer dither & color quantization
-    this.postPass = new PostProcessingPass(this.renderer, width, height, this.biome);
+    this.postPass = new PostProcessingPass(this.renderer, width, height, this.biome, this.isMobile);
 
     // Debug F2 hitbox group
     this.debugGroup = new THREE.Group();
@@ -325,10 +348,24 @@ export class GameEngine {
     e.preventDefault();
   };
 
+  private computeCameraFov(width: number, height: number): number {
+    const aspect = width / Math.max(1, height);
+    if (height < 520 && aspect >= 1.65) {
+      // Slightly wider crisp framing on ultra-wide phone landscape viewports (19.5:9 / 20:9)
+      return aspect > 2.0 ? 31.5 : 33;
+    }
+    if (aspect < 1.1) {
+      // Portrait fallback keeps enough horizontal corridor visibility
+      return 44;
+    }
+    return 34;
+  }
+
   private handleResize = (): void => {
     if (this.disposed) return;
     const width = Math.max(1, this.container.clientWidth);
     const height = Math.max(1, this.container.clientHeight);
+    this.camera.fov = this.computeCameraFov(width, height);
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
@@ -339,7 +376,81 @@ export class GameEngine {
     this.keysHeld.clear();
     this.mouseLeftHeld = false;
     this.mouseRightHeld = false;
+    this.clearTouchInputs();
   };
+
+  // =========================================================================
+  // MOBILE VIRTUAL TOUCH INPUT BRIDGE (Multi-touch safe, zero desktop clash)
+  // =========================================================================
+  public unlockAudio(): void {
+    this.audio.unlock();
+  }
+
+  public setTouchMove(left: boolean, right: boolean, down: boolean): void {
+    this.audio.unlock();
+    this.touchLeft = left;
+    this.touchRight = right;
+    this.touchDown = down;
+  }
+
+  public setTouchJump(pressed: boolean): void {
+    this.audio.unlock();
+    if (pressed && !this.touchJumpHeld && this.phase === 'playing') {
+      this.queuedJump = true;
+    }
+    this.touchJumpHeld = pressed;
+  }
+
+  public setTouchAttack(pressed: boolean): void {
+    this.audio.unlock();
+    if (pressed && !this.touchAttackHeld && this.phase === 'playing') {
+      this.queuedAttack = true;
+    } else if (!pressed && this.touchAttackHeld) {
+      this.queuedAttackRelease = true;
+    }
+    this.touchAttackHeld = pressed;
+  }
+
+  public setTouchGuard(pressed: boolean): void {
+    this.audio.unlock();
+    if (pressed && !this.touchGuardHeld && this.phase === 'playing') {
+      this.queuedGuard = true;
+    } else if (!pressed && this.touchGuardHeld) {
+      this.queuedGuardRelease = true;
+    }
+    this.touchGuardHeld = pressed;
+  }
+
+  public triggerTouchDash(): void {
+    this.audio.unlock();
+    if (this.phase === 'playing') {
+      this.queuedDash = true;
+    }
+  }
+
+  public triggerTouchExecute(): void {
+    this.audio.unlock();
+    if (this.phase === 'playing') {
+      this.queuedExecute = true;
+    }
+  }
+
+  public triggerQuickSpell(kind: 'wave' | 'nova'): void {
+    this.audio.unlock();
+    if (this.phase === 'playing') {
+      this.queuedQuickSpell = kind;
+    }
+  }
+
+  public clearTouchInputs(): void {
+    this.touchLeft = false;
+    this.touchRight = false;
+    this.touchDown = false;
+    this.touchJumpHeld = false;
+    this.touchAttackHeld = false;
+    this.touchGuardHeld = false;
+    this.queuedQuickSpell = null;
+  }
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     this.audio.unlock();
@@ -613,6 +724,7 @@ export class GameEngine {
       this.keysHeld.clear();
       this.mouseLeftHeld = false;
       this.mouseRightHeld = false;
+      this.clearTouchInputs();
     }
     if (next === 'title') {
       this.victorySeq.reset();
@@ -732,31 +844,35 @@ export class GameEngine {
       return;
     }
 
-    // Build edge-triggered + held input frame
+    // Build edge-triggered + held input frame (keyboard + mouse + mobile virtual touch controls)
     const input: InputState = {
-      left: this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft'),
-      right: this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight'),
-      down: this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown'),
+      left: this.keysHeld.has('KeyA') || this.keysHeld.has('ArrowLeft') || this.touchLeft,
+      right: this.keysHeld.has('KeyD') || this.keysHeld.has('ArrowRight') || this.touchRight,
+      down: this.keysHeld.has('KeyS') || this.keysHeld.has('ArrowDown') || this.touchDown,
       jumpHeld:
         this.keysHeld.has('Space') ||
         this.keysHeld.has('KeyW') ||
-        this.keysHeld.has('ArrowUp'),
+        this.keysHeld.has('ArrowUp') ||
+        this.touchJumpHeld,
       jumpJustPressed: this.queuedJump,
       attackHeld:
         this.keysHeld.has('KeyJ') ||
         this.keysHeld.has('KeyZ') ||
-        this.mouseLeftHeld,
+        this.mouseLeftHeld ||
+        this.touchAttackHeld,
       attackJustPressed: this.queuedAttack,
       attackJustReleased: this.queuedAttackRelease,
       guardHeld:
         this.keysHeld.has('KeyK') ||
         this.keysHeld.has('KeyX') ||
-        this.mouseRightHeld,
+        this.mouseRightHeld ||
+        this.touchGuardHeld,
       guardJustPressed: this.queuedGuard,
       guardJustReleased: this.queuedGuardRelease,
       dashJustPressed: this.queuedDash,
       executeJustPressed: this.queuedExecute,
     };
+    const quickSpell = this.queuedQuickSpell;
     this.queuedJump = false;
     this.queuedAttack = false;
     this.queuedAttackRelease = false;
@@ -764,6 +880,7 @@ export class GameEngine {
     this.queuedGuardRelease = false;
     this.queuedDash = false;
     this.queuedExecute = false;
+    this.queuedQuickSpell = null;
 
     // Handle automated cinematic Boss Intro Camera Pan when active
     if (this.bossIntroActive) {
@@ -903,6 +1020,47 @@ export class GameEngine {
       },
     };
 
+    const spellCallbacks = {
+      onCastAetherWave: (chargeLevel: number) => {
+        const comboMult = getComboDamageMultiplier(this.combo).mult;
+        this.magic.castAetherWave(
+          this.player,
+          chargeLevel,
+          comboMult,
+          this.vfx,
+          this.audio,
+          magicCallbacks,
+        );
+      },
+      onCastAegisNova: (chargeLevel: number) => {
+        const comboMult = getComboDamageMultiplier(this.combo).mult;
+        this.magic.castAegisNova(
+          this.player,
+          chargeLevel,
+          comboMult,
+          this.enemies,
+          this.vfx,
+          this.audio,
+          magicCallbacks,
+        );
+      },
+      onTriggerExecution: () => {
+        const comboMult = getComboDamageMultiplier(this.combo).mult;
+        this.execution.trigger(
+          this.biome,
+          this.player,
+          this.camX,
+          comboMult,
+          this.enemies,
+          this.vfx,
+          this.audio,
+          this.postPass,
+          executionCallbacks,
+        );
+        this.emitHud();
+      },
+    };
+
     // Update player (hold-to-charge spells + 3-Hit Combo Biome Execution Finisher)
     this.player.update(
       dt,
@@ -911,47 +1069,13 @@ export class GameEngine {
       this.vfx,
       this.audio,
       this.enemies.bossTriggered && !this.enemies.bossDefeated,
-      {
-        onCastAetherWave: (chargeLevel) => {
-          const comboMult = getComboDamageMultiplier(this.combo).mult;
-          this.magic.castAetherWave(
-            this.player,
-            chargeLevel,
-            comboMult,
-            this.vfx,
-            this.audio,
-            magicCallbacks,
-          );
-        },
-        onCastAegisNova: (chargeLevel) => {
-          const comboMult = getComboDamageMultiplier(this.combo).mult;
-          this.magic.castAegisNova(
-            this.player,
-            chargeLevel,
-            comboMult,
-            this.enemies,
-            this.vfx,
-            this.audio,
-            magicCallbacks,
-          );
-        },
-        onTriggerExecution: () => {
-          const comboMult = getComboDamageMultiplier(this.combo).mult;
-          this.execution.trigger(
-            this.biome,
-            this.player,
-            this.camX,
-            comboMult,
-            this.enemies,
-            this.vfx,
-            this.audio,
-            this.postPass,
-            executionCallbacks,
-          );
-          this.emitHud();
-        },
-      },
+      spellCallbacks,
     );
+
+    // Handle dedicated mobile quick-spell tap (one-tap Aether Wave / Aegis Nova)
+    if (quickSpell) {
+      this.player.triggerQuickSpell(quickSpell, this.vfx, this.audio, spellCallbacks);
+    }
 
     // Update active screen-wide Biome Execution sequence (full fluidity even during slow-mo beat)
     this.execution.update(
@@ -1450,8 +1574,13 @@ export class GameEngine {
   private applyCameraAndShadowFollow(): void {
     const sx = (Math.random() - 0.5) * 2 * this.shakeIntensity;
     const sy = (Math.random() - 0.5) * 2 * this.shakeIntensity;
-    this.camera.position.set(this.camX + sx, this.camY + sy, this.camZ);
-    this.camera.lookAt(this.camX + sx * 0.35, this.camY - 0.65 + sy * 0.35, 0);
+    const isCompactLandscape =
+      this.container.clientHeight < 520 && this.container.clientWidth > this.container.clientHeight;
+    // Slight camera framing lift on compact mobile landscape screens keeps the action plane clear of thumb controls
+    const zAdjust = isCompactLandscape ? -1.1 : 0;
+    const lookYOffset = isCompactLandscape ? -0.92 : -0.65;
+    this.camera.position.set(this.camX + sx, this.camY + sy, this.camZ + zAdjust);
+    this.camera.lookAt(this.camX + sx * 0.35, this.camY + lookYOffset + sy * 0.35, 0);
 
     // Keep shadow frustum centered around active camera X
     this.dirLight.position.set(this.camX + 12, 24, 14);

@@ -296,6 +296,58 @@ export class PlayerController {
   }
 
   /**
+   * Dedicated mobile quick-spell trigger (one-tap Aether Wave or Aegis Nova).
+   * Hold-to-charge on Attack/Guard also remains fully functional.
+   */
+  public triggerQuickSpell(
+    kind: 'wave' | 'nova',
+    vfx: VfxManager,
+    audio: ProceduralAudio,
+    spellCallbacks?: PlayerSpellCallbacks,
+  ): boolean {
+    if (this.isDead || this.hurtTimer > 0 || this.dashTimer > 0 || this.castPoseTimer > 0) {
+      return false;
+    }
+
+    const staminaCost = kind === 'wave' ? 22 : 24;
+    if (this.stamina < staminaCost) {
+      return false;
+    }
+
+    this.stamina = Math.max(0, this.stamina - staminaCost);
+    this.attackStep = 0;
+    this.attackQueued = false;
+    this.isAttackHitboxActive = false;
+    this.isGuarding = false;
+    this.attackCharge = 0;
+    this.guardCharge = 0;
+    this.attackHoldTime = 0;
+    this.guardHoldTime = 0;
+    this.attackChargeReadyPlayed = false;
+    this.guardChargeReadyPlayed = false;
+
+    if (kind === 'wave') {
+      this.castPoseTimer = 0.24;
+      this.vx = -this.facing * 2.6;
+      this.animator.setState('ATTACK_3', true);
+      this.animator.triggerSquash(1.2, 0.86);
+      vfx.spawnRing(this.x + this.facing * 0.6, this.y + 1.05, 0x38bdf8, 0.3, 2.0, 0.22);
+      audio.playChargeReady('attack');
+      spellCallbacks?.onCastAetherWave?.(1.0);
+    } else {
+      this.parrySuccessTimer = 0.26;
+      this.castPoseTimer = 0.24;
+      this.vx *= 0.25;
+      this.animator.setState('PARRY', true);
+      this.animator.triggerSquash(1.2, 0.86);
+      vfx.spawnRing(this.x, this.y + 1.05, 0xc084fc, 0.35, 2.2, 0.24);
+      audio.playChargeReady('guard');
+      spellCallbacks?.onCastAegisNova?.(1.0);
+    }
+    return true;
+  }
+
+  /**
    * Evaluates incoming hit against invulnerability, Perfect Parry, and Guard.
    */
   public receiveDamage(

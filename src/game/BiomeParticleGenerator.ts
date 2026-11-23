@@ -365,8 +365,11 @@ export class BiomeParticleGenerator {
   private accentMesh: THREE.InstancedMesh;
   private accentMotes: AccentMote[] = [];
 
-  constructor(scene: THREE.Scene, initialBiome: BiomeId, centerX = 6) {
+  private densityScale: number;
+
+  constructor(scene: THREE.Scene, initialBiome: BiomeId, centerX = 6, densityScale = 1) {
     this.scene = scene;
+    this.densityScale = THREE.MathUtils.clamp(densityScale, 0.35, 1);
     this.profile = BIOME_PARTICLE_PROFILES[initialBiome];
 
     // Layer 1: Primary shaped 3D environmental particles
@@ -419,9 +422,13 @@ export class BiomeParticleGenerator {
     prevTex.dispose();
 
     // Populate Primary layer across 3D depth parallax Z = -7.5 .. +3.0
+    const primaryCount = Math.min(
+      MAX_PRIMARY,
+      Math.max(24, Math.round(nextProfile.primaryCount * this.densityScale)),
+    );
     this.primaryMotes = [];
-    this.primaryMesh.count = nextProfile.primaryCount;
-    for (let i = 0; i < nextProfile.primaryCount; i++) {
+    this.primaryMesh.count = primaryCount;
+    for (let i = 0; i < primaryCount; i++) {
       const z = randRange(-7.2, 2.9);
       // Slight scale boost for near-camera particles for extra 2.5D depth presence
       const depthScale = z > 1.0 ? 1.15 : z < -4.0 ? 0.85 : 1.0;
@@ -450,9 +457,13 @@ export class BiomeParticleGenerator {
     }
 
     // Populate Secondary HDR-emissive biome motes
+    const accentCount = Math.min(
+      MAX_ACCENT,
+      Math.max(12, Math.round(nextProfile.accentCount * this.densityScale)),
+    );
     this.accentMotes = [];
-    this.accentMesh.count = nextProfile.accentCount;
-    for (let i = 0; i < nextProfile.accentCount; i++) {
+    this.accentMesh.count = accentCount;
+    for (let i = 0; i < accentCount; i++) {
       const hex = nextProfile.accentColors[i % nextProfile.accentColors.length];
       const baseColor = new THREE.Color(hex).multiplyScalar(nextProfile.accentHdrBoost);
       this.accentMotes.push({

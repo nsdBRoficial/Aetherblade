@@ -670,7 +670,8 @@ export class ProceduralAudio {
 
 export class VfxManager {
   private scene: THREE.Scene;
-  private maxParticles = 320;
+  private isMobile: boolean;
+  private maxParticles: number;
   private particles: Particle[] = [];
   private particleMesh: THREE.InstancedMesh;
   private particleGeo: THREE.BufferGeometry;
@@ -694,8 +695,10 @@ export class VfxManager {
   // Native Three.js 3D Sprite floating damage numbers
   private floatingText3D: FloatingText3DSystem;
 
-  constructor(scene: THREE.Scene, palette: BiomePalette) {
+  constructor(scene: THREE.Scene, palette: BiomePalette, isMobile = false) {
     this.scene = scene;
+    this.isMobile = isMobile;
+    this.maxParticles = isMobile ? 180 : 320;
     this.floatingText3D = new FloatingText3DSystem(scene);
 
     // Pooled combat particles (HDR-capable for selective bloom on bright sparks)
@@ -739,8 +742,8 @@ export class VfxManager {
     }
     scene.add(this.particleMesh);
 
-    // Unique 3D environmental particles per biome (cherry blossoms, forest fireflies, canyon embers, bamboo wisps, snow, harvest chaff)
-    this.biomeParticles = new BiomeParticleGenerator(scene, palette.id, 6);
+    // Unique 3D environmental particles per biome (scaled cleanly on mobile GPUs)
+    this.biomeParticles = new BiomeParticleGenerator(scene, palette.id, 6, isMobile ? 0.55 : 1);
 
     // Dynamic PointLight
     this.actionLight = new THREE.PointLight(0x38bdf8, 0, 11, 1.6);
@@ -748,8 +751,15 @@ export class VfxManager {
     scene.add(this.actionLight);
 
     // Shared geometries for rings & slash arcs
-    this.ringGeo = new THREE.RingGeometry(0.68, 0.96, 28);
-    this.slashGeo = new THREE.RingGeometry(0.95, 1.65, 22, 1, -Math.PI * 0.42, Math.PI * 0.84);
+    this.ringGeo = new THREE.RingGeometry(0.68, 0.96, isMobile ? 20 : 28);
+    this.slashGeo = new THREE.RingGeometry(
+      0.95,
+      1.65,
+      isMobile ? 16 : 22,
+      1,
+      -Math.PI * 0.42,
+      Math.PI * 0.84,
+    );
   }
 
   public configureBiomeParticles(palette: BiomePalette, centerX: number): void {
@@ -775,8 +785,9 @@ export class VfxManager {
     gravity = 18,
     scale = 1,
   ): void {
+    const budgetCount = this.isMobile ? Math.max(3, Math.ceil(count * 0.65)) : count;
     let spawned = 0;
-    for (let i = 0; i < this.maxParticles && spawned < count; i++) {
+    for (let i = 0; i < this.maxParticles && spawned < budgetCount; i++) {
       const p = this.particles[i];
       if (!p.active) {
         p.active = true;
@@ -807,8 +818,9 @@ export class VfxManager {
   }
 
   public spawnDustPuff(x: number, y: number, count = 8): void {
+    const budgetCount = this.isMobile ? Math.max(3, Math.ceil(count * 0.6)) : count;
     let spawned = 0;
-    for (let i = 0; i < this.maxParticles && spawned < count; i++) {
+    for (let i = 0; i < this.maxParticles && spawned < budgetCount; i++) {
       const p = this.particles[i];
       if (!p.active) {
         p.active = true;

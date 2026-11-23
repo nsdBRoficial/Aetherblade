@@ -4,6 +4,9 @@ import React, { useRef } from 'react';
 import {
   ArrowRight,
   Check,
+  Gamepad2,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   RotateCcw,
@@ -31,6 +34,8 @@ import { OffscreenEnemyIndicators } from './OffscreenEnemyIndicators';
 
 interface GameHUDProps {
   hud: HudSnapshot;
+  touchControlsEnabled: boolean;
+  isFullscreen: boolean;
   onStart: () => void;
   onResume: () => void;
   onPause: () => void;
@@ -42,6 +47,8 @@ interface GameHUDProps {
   onToggleDebug: () => void;
   onCycleShaderMode: () => void;
   onUploadSprite: (file: File) => void;
+  onToggleTouchControls: () => void;
+  onToggleFullscreen: () => void;
 }
 
 const SHADER_MODE_LABELS: Record<ShaderStyleMode, string> = {
@@ -53,6 +60,8 @@ const SHADER_MODE_LABELS: Record<ShaderStyleMode, string> = {
 
 export const GameHUD: React.FC<GameHUDProps> = ({
   hud,
+  touchControlsEnabled,
+  isFullscreen,
   onStart,
   onResume,
   onPause,
@@ -64,6 +73,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
   onToggleDebug,
   onCycleShaderMode,
   onUploadSprite,
+  onToggleTouchControls,
+  onToggleFullscreen,
 }) => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const palette = BIOME_PALETTES[hud.biome];
@@ -131,15 +142,21 @@ export const GameHUD: React.FC<GameHUDProps> = ({
       {/* IN-GAME PERIMETER HUD (hidden briefly during Boss Intro & Victory/Area Transitions) */}
       {hud.phase !== 'title' && !hud.boss.introActive && !isTransitioning && (
         <>
-          <div className="flex items-start justify-between gap-4 px-5 pt-4">
-            {/* Top-Left: Vitality, Stamina & Concentrated Magic Charge Cluster */}
-            <div className="w-[264px] rounded-lg border border-white/12 bg-[#090d16]/86 px-3.5 py-2.5 shadow-lg">
-              <div className="mb-1.5 flex items-center justify-between text-xs text-slate-300">
-                <span className="font-semibold tracking-wide text-slate-100">
+          <div className="safe-top safe-x flex items-start justify-between gap-2 sm:gap-4 sm:px-5 sm:pt-4">
+            {/* Top-Left: Vitality, Stamina & Concentrated Magic Charge Cluster (compact on mobile landscape) */}
+            <div
+              className={`rounded-lg border border-white/12 bg-[#090d16]/86 shadow-lg ${
+                touchControlsEnabled
+                  ? 'w-[188px] px-2.5 py-1.5 sm:w-[248px] sm:px-3.5 sm:py-2'
+                  : 'w-[220px] px-3 py-2 sm:w-[264px] sm:px-3.5 sm:py-2.5'
+              }`}
+            >
+              <div className="mb-1 flex items-center justify-between gap-1 text-[10px] sm:text-xs text-slate-300">
+                <span className="truncate font-semibold tracking-wide text-slate-100">
                   {palette.name}
                 </span>
-                <span className="font-mono-num text-slate-400">
-                  Zone {hud.zone}/4 ·{' '}
+                <span className="font-mono-num shrink-0 text-slate-400">
+                  Z{hud.zone}/4 ·{' '}
                   <span style={{ color: diffConfig.accent }} className="font-semibold">
                     {diffConfig.name}
                   </span>
@@ -147,14 +164,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
 
               {/* HP Bar */}
-              <div className="mb-2">
-                <div className="mb-0.5 flex items-center justify-between text-[11px]">
-                  <span className="font-medium text-rose-300">Vitality</span>
+              <div className="mb-1.5">
+                <div className="mb-0.5 flex items-center justify-between text-[10px] sm:text-[11px]">
+                  <span className="font-medium text-rose-300">HP</span>
                   <span className="font-mono-num font-semibold text-slate-100">
-                    {hud.hp} / {hud.maxHp}
+                    {hud.hp}/{hud.maxHp}
                   </span>
                 </div>
-                <div className="h-2.5 w-full overflow-hidden rounded-sm bg-slate-900/95 ring-1 ring-white/10">
+                <div className="h-2 sm:h-2.5 w-full overflow-hidden rounded-sm bg-slate-900/95 ring-1 ring-white/10">
                   <div
                     className="h-full bg-gradient-to-r from-rose-700 via-rose-500 to-rose-400 transition-transform duration-150 ease-out origin-left"
                     style={{ transform: `scaleX(${hpPct / 100})` }}
@@ -164,8 +181,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
               {/* Stamina Bar */}
               <div>
-                <div className="mb-0.5 flex items-center justify-between text-[11px]">
-                  <span className="font-medium text-sky-300">Stamina</span>
+                <div className="mb-0.5 flex items-center justify-between text-[10px] sm:text-[11px]">
+                  <span className="font-medium text-sky-300">SP</span>
                   <span className="font-mono-num text-slate-300">{hud.stamina}</span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-sm bg-slate-900/95 ring-1 ring-white/10">
@@ -178,10 +195,10 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
               {/* Concentrated Magic Charge Meter (visible only while channeling M1 or M2) */}
               {activeChargeKind && (
-                <div className="mt-2 border-t border-white/10 pt-1.5">
+                <div className="mt-1.5 border-t border-white/10 pt-1">
                   <div className="mb-0.5 flex items-center justify-between text-[10px]">
                     <span
-                      className={`font-semibold tracking-wide ${
+                      className={`truncate font-semibold tracking-wide ${
                         activeChargeVal >= 0.95
                           ? 'text-amber-300'
                           : activeChargeKind === 'attack'
@@ -191,11 +208,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     >
                       {activeChargeKind === 'attack'
                         ? activeChargeVal >= 0.95
-                          ? 'SUPERNOVA WAVE READY!'
-                          : 'Charging Aether Wave'
+                          ? 'WAVE READY!'
+                          : 'Aether Wave'
                         : activeChargeVal >= 0.95
-                          ? 'AEGIS SUPERNOVA READY!'
-                          : 'Charging Aegis Nova'}
+                          ? 'NOVA READY!'
+                          : 'Aegis Nova'}
                     </span>
                     <span className="font-mono-num font-bold text-slate-200">
                       {Math.round(activeChargeVal * 100)}%
@@ -217,59 +234,124 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               )}
             </div>
 
-            {/* Top-Center: Stage Progress Map Bar (X = 0..180 -> Boss) */}
-            <div className="hidden md:flex flex-col items-center rounded-lg border border-white/12 bg-[#090d16]/84 px-4 py-2.5 shadow-lg w-[340px]">
-              <div className="mb-1.5 flex w-full items-center justify-between text-[11px] text-slate-300">
-                <span>Stage Progress</span>
-                <span className="font-mono-num text-slate-200">
-                  {Math.round(hud.progress * 100)}%
-                </span>
+            {/* Top-Center: Stage Progress Map Bar (or Boss Health Bar on Mobile Touch Mode!) */}
+            {touchControlsEnabled && hud.boss.active && hud.phase === 'playing' ? (
+              <div
+                className="flex flex-col rounded-lg border bg-[#090d16]/90 px-3 py-1.5 shadow-xl w-[min(320px,42vw)]"
+                style={{ borderColor: `${hud.boss.accent}66` }}
+              >
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                  <span
+                    className="font-display truncate text-xs sm:text-sm font-bold tracking-wider"
+                    style={{ color: hud.boss.accent }}
+                  >
+                    {hud.boss.name}
+                  </span>
+                  <div className="flex items-center gap-1.5 text-[10px] shrink-0">
+                    {hud.boss.phase === 2 && (
+                      <span className="font-bold text-orange-400">II</span>
+                    )}
+                    <span className="font-mono-num text-slate-200">
+                      {hud.boss.hp}/{hud.boss.maxHp}
+                    </span>
+                  </div>
+                </div>
+                <div className="h-2.5 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-white/15">
+                  <div
+                    className="h-full origin-left transition-transform duration-150 ease-out"
+                    style={{
+                      transform: `scaleX(${bossPct / 100})`,
+                      background:
+                        hud.boss.phase === 2
+                          ? `linear-gradient(90deg, #b91c1c, ${hud.boss.accent}, #fef08a)`
+                          : `linear-gradient(90deg, #9f1239, ${hud.boss.accent})`,
+                    }}
+                  />
+                </div>
               </div>
-              <div className="relative h-2 w-full rounded-sm bg-slate-800/95">
-                {/* Zone divider ticks */}
-                <div className="absolute left-1/4 top-0 h-full w-px bg-slate-600/80" />
-                <div className="absolute left-1/2 top-0 h-full w-px bg-slate-600/80" />
-                <div className="absolute left-[82%] top-0 h-full w-px bg-amber-400/70" />
-                {/* Fill */}
-                <div
-                  className="h-full rounded-sm transition-transform duration-150 origin-left"
-                  style={{
-                    backgroundColor: palette.hudAccent,
-                    transform: `scaleX(${hud.progress})`,
-                  }}
-                />
-                {/* Player diamond cursor */}
-                <div
-                  className="absolute top-1/2 h-3 w-3 -translate-y-1/2 -translate-x-1/2 rotate-45 border border-white bg-sky-400 shadow"
-                  style={{ left: `${hud.progress * 100}%` }}
-                />
+            ) : (
+              <div
+                className={`hidden sm:flex flex-col items-center rounded-lg border border-white/12 bg-[#090d16]/84 shadow-lg ${
+                  touchControlsEnabled
+                    ? 'w-[210px] md:w-[290px] px-3 py-1.5'
+                    : 'w-[260px] md:w-[340px] px-4 py-2.5'
+                }`}
+              >
+                <div className="mb-1 flex w-full items-center justify-between text-[10px] sm:text-[11px] text-slate-300">
+                  <span>Stage</span>
+                  <span className="font-mono-num text-slate-200">
+                    {Math.round(hud.progress * 100)}%
+                  </span>
+                </div>
+                <div className="relative h-1.5 sm:h-2 w-full rounded-sm bg-slate-800/95">
+                  <div className="absolute left-1/4 top-0 h-full w-px bg-slate-600/80" />
+                  <div className="absolute left-1/2 top-0 h-full w-px bg-slate-600/80" />
+                  <div className="absolute left-[82%] top-0 h-full w-px bg-amber-400/70" />
+                  <div
+                    className="h-full rounded-sm transition-transform duration-150 origin-left"
+                    style={{
+                      backgroundColor: palette.hudAccent,
+                      transform: `scaleX(${hud.progress})`,
+                    }}
+                  />
+                  <div
+                    className="absolute top-1/2 h-2.5 w-2.5 sm:h-3 sm:w-3 -translate-y-1/2 -translate-x-1/2 rotate-45 border border-white bg-sky-400 shadow"
+                    style={{ left: `${hud.progress * 100}%` }}
+                  />
+                </div>
+                {!touchControlsEnabled && (
+                  <div className="mt-1.5 flex w-full items-center justify-between text-[10px] text-slate-400">
+                    <span>Outskirts</span>
+                    <span>Ridge</span>
+                    <span>Gauntlet</span>
+                    <span className="flex items-center gap-1 text-amber-300 font-medium">
+                      <Skull className="h-3 w-3" /> Boss
+                    </span>
+                  </div>
+                )}
               </div>
-              <div className="mt-1.5 flex w-full items-center justify-between text-[10px] text-slate-400">
-                <span>Outskirts</span>
-                <span>Ridge</span>
-                <span>Gauntlet</span>
-                <span className="flex items-center gap-1 text-amber-300 font-medium">
-                  <Skull className="h-3 w-3" /> Boss
-                </span>
-              </div>
-            </div>
+            )}
 
             {/* Top-Right: Score, Combo & Utility Controls */}
-            <div className="flex flex-col items-end gap-2">
-              <div className="flex items-center gap-2">
-                <div className="rounded-lg border border-white/12 bg-[#090d16]/86 px-3.5 py-2 text-right shadow-lg">
-                  <div className="text-[10px] tracking-wide text-slate-400">Score</div>
-                  <div className="font-mono-num text-base font-bold leading-tight text-slate-100">
+            <div className="flex flex-col items-end gap-1.5 sm:gap-2">
+              <div className="flex items-center gap-1.5 sm:gap-2">
+                <div className="rounded-lg border border-white/12 bg-[#090d16]/86 px-2.5 py-1 sm:px-3.5 sm:py-2 text-right shadow-lg">
+                  <div className="text-[9px] sm:text-[10px] tracking-wide text-slate-400">Score</div>
+                  <div className="font-mono-num text-xs sm:text-base font-bold leading-tight text-slate-100">
                     {hud.score.toLocaleString()}
                   </div>
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-white/12 bg-[#090d16]/86 p-1.5 shadow-lg">
+                <div className="pointer-events-auto flex items-center gap-1 rounded-lg border border-white/12 bg-[#090d16]/86 p-1 sm:p-1.5 shadow-lg">
+                  <button
+                    type="button"
+                    onClick={onToggleTouchControls}
+                    title={touchControlsEnabled ? 'Hide Mobile Touch Controls' : 'Show Mobile Touch Controls'}
+                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
+                      touchControlsEnabled
+                        ? 'bg-sky-500/25 text-sky-300 ring-1 ring-sky-400/50'
+                        : 'text-slate-400 hover:bg-white/10 hover:text-white'
+                    }`}
+                  >
+                    <Gamepad2 className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onToggleFullscreen}
+                    title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen Landscape'}
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
+                  >
+                    {isFullscreen ? (
+                      <Minimize2 className="h-4 w-4 text-sky-300" />
+                    ) : (
+                      <Maximize2 className="h-4 w-4" />
+                    )}
+                  </button>
                   <button
                     type="button"
                     onClick={onCycleShaderMode}
                     title={`Visual Filter: ${SHADER_MODE_LABELS[hud.shaderMode]} (F3)`}
-                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
+                    className={`hidden sm:flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
                       hud.shaderMode !== 'off'
                         ? 'bg-sky-500/20 text-sky-300 ring-1 ring-sky-400/45 hover:bg-sky-500/30'
                         : 'text-slate-400 hover:bg-white/10 hover:text-white'
@@ -277,23 +359,25 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   >
                     <Palette className="h-4 w-4" />
                   </button>
-                  <button
-                    type="button"
-                    onClick={onToggleDebug}
-                    title="Toggle Hitbox Debug (F2)"
-                    className={`flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
-                      hud.debugHitboxes
-                        ? 'bg-emerald-500/25 text-emerald-300 ring-1 ring-emerald-400/50'
-                        : 'text-slate-300 hover:bg-white/10 hover:text-white'
-                    }`}
-                  >
-                    <Box className="h-4 w-4" />
-                  </button>
+                  {!touchControlsEnabled && (
+                    <button
+                      type="button"
+                      onClick={onToggleDebug}
+                      title="Toggle Hitbox Debug (F2)"
+                      className={`hidden md:flex h-9 w-9 items-center justify-center rounded-md transition-colors cursor-pointer ${
+                        hud.debugHitboxes
+                          ? 'bg-emerald-500/25 text-emerald-300 ring-1 ring-emerald-400/50'
+                          : 'text-slate-300 hover:bg-white/10 hover:text-white'
+                      }`}
+                    >
+                      <Box className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={onToggleMute}
                     title={hud.muted ? 'Unmute Audio' : 'Mute Audio'}
-                    className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
                   >
                     {hud.muted ? (
                       <VolumeX className="h-4 w-4 text-rose-400" />
@@ -305,7 +389,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     type="button"
                     onClick={hud.phase === 'paused' ? onResume : onPause}
                     title="Pause (Esc)"
-                    className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-slate-300 transition-colors hover:bg-white/10 hover:text-white cursor-pointer"
                   >
                     {hud.phase === 'paused' ? (
                       <Play className="h-4 w-4" />
@@ -328,7 +412,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
 
           {/* F2 Hitbox Debug Strip (only shown when F2 toggled ON) */}
-          {hud.debugHitboxes && (
+          {hud.debugHitboxes && !touchControlsEnabled && (
             <div className="pointer-events-auto fixed left-5 bottom-4 flex flex-wrap items-center gap-3 rounded-lg border border-emerald-400/30 bg-[#090d16]/90 px-3.5 py-2 text-xs text-slate-200 shadow-lg">
               <span className="font-semibold text-emerald-300">F2 Debug</span>
               <span className="text-slate-400">·</span>
@@ -350,8 +434,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           )}
 
-          {/* BOTTOM BOSS HEALTH BAR */}
-          {hud.boss.active && hud.phase === 'playing' && (
+          {/* BOTTOM BOSS HEALTH BAR (Desktop mode — on Touch Mode it lives cleanly in Top-Center!) */}
+          {!touchControlsEnabled && hud.boss.active && hud.phase === 'playing' && (
             <div
               className="fixed bottom-5 left-1/2 w-[min(640px,90vw)] -translate-x-1/2 rounded-lg border bg-[#090d16]/92 px-5 py-3 shadow-2xl"
               style={{ borderColor: `${hud.boss.accent}59` }}
@@ -390,37 +474,45 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
           )}
 
-          {/* EXECUTION READY PROMPT (appears when 3-Hit Combo completes) */}
+          {/* EXECUTION READY PROMPT (top-center on Touch Mode so bottom controls stay unobstructed) */}
           {hud.phase === 'playing' &&
             hud.execution.ready &&
             !hud.execution.active && (
               <div
-                className={`fixed left-1/2 -translate-x-1/2 w-[min(360px,88vw)] rounded-lg border bg-[#090d16]/92 px-4 py-2.5 shadow-2xl ${
-                  hud.boss.active ? 'bottom-[106px]' : 'bottom-12'
+                className={`fixed left-1/2 -translate-x-1/2 rounded-lg border bg-[#090d16]/92 px-3.5 py-2 shadow-2xl ${
+                  touchControlsEnabled
+                    ? hud.boss.active
+                      ? 'top-[76px] w-[min(270px,46vw)]'
+                      : 'top-14 w-[min(280px,52vw)]'
+                    : hud.boss.active
+                      ? 'bottom-[106px] w-[min(360px,88vw)]'
+                      : 'bottom-12 w-[min(360px,88vw)]'
                 }`}
                 style={{
                   borderColor: `${hud.execution.accent}88`,
-                  boxShadow: `0 0 26px ${hud.execution.accent}33`,
+                  boxShadow: `0 0 24px ${hud.execution.accent}33`,
                 }}
               >
-                <div className="mb-1.5 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
                     <span
-                      className="font-mono-num inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[11px] font-extrabold text-slate-950 shrink-0"
+                      className="font-mono-num inline-flex items-center justify-center rounded px-1.5 py-0.5 text-[10px] font-extrabold text-slate-950 shrink-0"
                       style={{ backgroundColor: hud.execution.accent }}
                     >
-                      E / Q
+                      {touchControlsEnabled ? 'EXEC' : 'E / Q'}
                     </span>
                     <span className="truncate text-xs font-bold tracking-wide text-white">
                       {hud.execution.moveName}
                     </span>
                   </div>
-                  <span
-                    className="text-[10px] font-semibold tracking-wider uppercase shrink-0"
-                    style={{ color: hud.execution.accent }}
-                  >
-                    Execution Ready
-                  </span>
+                  {!touchControlsEnabled && (
+                    <span
+                      className="text-[10px] font-semibold tracking-wider uppercase shrink-0"
+                      style={{ color: hud.execution.accent }}
+                    >
+                      Execution Ready
+                    </span>
+                  )}
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-sm bg-slate-900 ring-1 ring-white/10">
                   <div
@@ -434,8 +526,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </div>
             )}
 
-          {/* DISCREET BOTTOM CONTROLS HINT (hidden when Boss Bar or Debug active) */}
-          {!hud.boss.active && !hud.debugHitboxes && hud.phase === 'playing' && (
+          {/* DISCREET BOTTOM CONTROLS HINT (Desktop only — hidden when Touch Controls active) */}
+          {!touchControlsEnabled && !hud.boss.active && !hud.debugHitboxes && hud.phase === 'playing' && (
             <div className="fixed bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-white/10 bg-[#090d16]/76 px-4 py-1.5 text-[11px] text-slate-300 whitespace-nowrap">
               A/D Move · Space Jump (x2) · M1/J Combo · E/Q Execution (after 3-Hit) · Hold M1/M2 Spells · Shift Dash
             </div>
@@ -514,35 +606,56 @@ export const GameHUD: React.FC<GameHUDProps> = ({
         </>
       )}
 
-      {/* TITLE SCREEN OVERLAY (Live 3D world staged cleanly behind) */}
+      {/* TITLE SCREEN OVERLAY (Live 3D world staged cleanly behind — scroll-safe for compact mobile landscape) */}
       {hud.phase === 'title' && (
-        <div className="pointer-events-auto fixed inset-0 flex flex-col justify-between bg-gradient-to-b from-[#070b12]/72 via-[#070b12]/28 to-[#070b12]/88 px-6 py-7">
-          {/* Top corner quiet audio button */}
-          <div className="flex items-center justify-between">
-            <div className="text-xs font-medium text-slate-300">
+        <div className="pointer-events-auto fixed inset-0 flex flex-col justify-between overflow-y-auto bg-gradient-to-b from-[#070b12]/72 via-[#070b12]/28 to-[#070b12]/88 px-4 py-3 sm:px-6 sm:py-6 safe-x">
+          {/* Top corner quiet utility buttons */}
+          <div className="flex items-center justify-between gap-2 shrink-0">
+            <div className="text-[11px] sm:text-xs font-medium text-slate-300">
               {hud.highScore > 0 ? (
                 <span className="font-mono-num">
                   Best Score · {hud.highScore.toLocaleString()}
                 </span>
               ) : (
-                <span>Side-Scrolling 2.5D Action</span>
+                <span>Aetherblade 2.5D · Mobile & Desktop</span>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={onToggleTouchControls}
+                title="Toggle Mobile Touch Controls"
+                className={`inline-flex h-9 sm:h-10 items-center gap-1.5 rounded-lg border px-2.5 sm:px-3 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  touchControlsEnabled
+                    ? 'border-sky-400/50 bg-sky-500/20 text-sky-200'
+                    : 'border-white/15 bg-[#090d16]/80 text-slate-200 hover:bg-white/15'
+                }`}
+              >
+                <Gamepad2 className="h-4 w-4" />
+                <span>{touchControlsEnabled ? 'Touch ON' : 'Touch'}</span>
+              </button>
               <button
                 type="button"
                 onClick={onCycleShaderMode}
                 title="Cycle Color-Grading & Pixel Dither Filter (F3)"
-                className="inline-flex h-10 items-center gap-2 rounded-lg border border-white/15 bg-[#090d16]/80 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/15 whitespace-nowrap shrink-0 cursor-pointer"
+                className="hidden sm:inline-flex h-9 sm:h-10 items-center gap-2 rounded-lg border border-white/15 bg-[#090d16]/80 px-3 text-xs font-medium text-slate-200 transition-colors hover:bg-white/15 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <Palette className="h-4 w-4 text-sky-300" />
                 {SHADER_MODE_LABELS[hud.shaderMode]}
               </button>
               <button
                 type="button"
+                onClick={onToggleFullscreen}
+                title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen Landscape'}
+                className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-white/15 bg-[#090d16]/80 text-slate-200 transition-colors hover:bg-white/15 cursor-pointer"
+              >
+                {isFullscreen ? <Minimize2 className="h-4 w-4 text-sky-300" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
                 onClick={onToggleMute}
                 title={hud.muted ? 'Unmute Audio' : 'Mute Audio'}
-                className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/15 bg-[#090d16]/80 text-slate-200 transition-colors hover:bg-white/15 cursor-pointer"
+                className="flex h-9 w-9 sm:h-10 sm:w-10 items-center justify-center rounded-lg border border-white/15 bg-[#090d16]/80 text-slate-200 transition-colors hover:bg-white/15 cursor-pointer"
               >
                 {hud.muted ? <VolumeX className="h-4 w-4 text-rose-400" /> : <Volume2 className="h-4 w-4" />}
               </button>
@@ -550,11 +663,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
 
           {/* Center Title Crest & Primary CTA */}
-          <div className="mx-auto flex max-w-2xl flex-col items-center text-center">
+          <div className="mx-auto my-auto flex max-w-2xl flex-col items-center py-1 text-center">
             {/* Bespoke SVG Sword & Shield Crest Lockup */}
             <svg
               viewBox="0 0 360 92"
-              className="mb-2 h-20 w-auto max-w-[340px] drop-shadow-[0_6px_18px_rgba(0,0,0,0.8)]"
+              className="mb-1 sm:mb-2 h-12 sm:h-20 w-auto max-w-[340px] drop-shadow-[0_6px_18px_rgba(0,0,0,0.8)]"
               aria-label="Aetherblade"
             >
               <defs>
@@ -564,13 +677,11 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   <stop offset="100%" stopColor="#fbbf24" />
                 </linearGradient>
               </defs>
-              {/* Ornate horizontal blade divider */}
               <path
                 d="M28 74 L145 74 L180 65 L215 74 L332 74 L215 78 L180 86 L145 78 Z"
                 fill="url(#bladeGrad)"
                 opacity="0.92"
               />
-              {/* Emblem diamond */}
               <polygon
                 points="180,6 190,18 180,30 170,18"
                 fill="#38bdf8"
@@ -591,7 +702,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
               </text>
             </svg>
 
-            <p className="mb-6 max-w-md text-sm text-slate-200/90">
+            <p className="mb-2.5 sm:mb-5 max-w-md text-xs sm:text-sm text-slate-200/90">
               Slash through 4 gauntlet zones, reflect projectiles with Perfect Parry, and vanquish{' '}
               <span className="font-semibold text-white">{palette.bossName}</span> in{' '}
               <span className="font-semibold text-white">{palette.name}</span>.
@@ -601,14 +712,14 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             <button
               type="button"
               onClick={onStart}
-              className="mb-5 inline-flex items-center gap-2.5 rounded-lg bg-sky-500 px-8 py-3.5 text-sm font-bold tracking-wide text-slate-950 shadow-[0_0_28px_rgba(56,189,248,0.4)] transition-transform duration-150 hover:scale-[1.02] hover:bg-sky-400 active:scale-[0.98] whitespace-nowrap shrink-0 cursor-pointer"
+              className="mb-2.5 sm:mb-4 inline-flex min-h-[44px] items-center gap-2.5 rounded-lg bg-sky-500 px-7 py-2.5 sm:px-8 sm:py-3.5 text-sm font-bold tracking-wide text-slate-950 shadow-[0_0_28px_rgba(56,189,248,0.4)] transition-transform duration-150 hover:scale-[1.02] hover:bg-sky-400 active:scale-[0.97] whitespace-nowrap shrink-0 cursor-pointer"
             >
               <Swords className="h-4 w-4" />
               Play Stage
             </button>
 
             {/* Biome Selector (Segmented functional buttons — live-previews the 3D biome!) */}
-            <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5 rounded-xl border border-white/12 bg-[#090d16]/86 p-1.5 shadow-xl">
+            <div className="mb-1.5 flex flex-wrap items-center justify-center gap-1 rounded-xl border border-white/12 bg-[#090d16]/86 p-1 sm:p-1.5 shadow-xl">
               {BIOME_ORDER.map((id) => {
                 const b = BIOME_PALETTES[id];
                 const active = hud.biome === id;
@@ -617,7 +728,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                     key={id}
                     type="button"
                     onClick={() => onSelectBiome(id)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    className={`rounded-lg px-2.5 py-1.5 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                       active
                         ? 'bg-white text-slate-950 shadow'
                         : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -630,7 +741,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             {/* Clean unboxed native biome bestiary & Boss preview line */}
-            <div className="mb-3 text-[11px] text-slate-300/95 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
+            <div className="mb-2 text-[10px] sm:text-[11px] text-slate-300/95 drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)]">
               <span className="text-slate-400">Foes:</span>{' '}
               <span className="text-slate-100">{roster.units.grunt.name}</span> ·{' '}
               <span className="text-slate-100">{roster.units.ranger.name}</span> ·{' '}
@@ -644,9 +755,9 @@ export const GameHUD: React.FC<GameHUDProps> = ({
             </div>
 
             {/* Difficulty Select Menu */}
-            <div className="flex flex-col items-center gap-1.5 rounded-xl border border-white/12 bg-[#090d16]/86 px-3 py-2 shadow-xl">
-              <div className="flex flex-wrap items-center justify-center gap-1.5">
-                <span className="px-1.5 text-[11px] font-medium text-slate-400">
+            <div className="flex flex-col items-center gap-1 rounded-xl border border-white/12 bg-[#090d16]/86 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-xl">
+              <div className="flex flex-wrap items-center justify-center gap-1 sm:gap-1.5">
+                <span className="px-1 text-[10px] sm:text-[11px] font-medium text-slate-400">
                   Difficulty
                 </span>
                 {DIFFICULTY_ORDER.map((id) => {
@@ -657,7 +768,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                       key={id}
                       type="button"
                       onClick={() => onSelectDifficulty(id)}
-                      className={`rounded-md px-3 py-1 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      className={`rounded-md px-2.5 py-1 text-[11px] sm:text-xs font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                         active
                           ? 'text-slate-950 shadow'
                           : 'text-slate-300 hover:bg-white/10 hover:text-white'
@@ -669,7 +780,7 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                   );
                 })}
               </div>
-              <div className="font-mono-num text-[11px] text-slate-300">
+              <div className="font-mono-num text-[10px] sm:text-[11px] text-slate-300">
                 Incoming DMG{' '}
                 <span style={{ color: diffConfig.accent }} className="font-semibold">
                   {diffConfig.playerDamageMult.toFixed(2)}×
@@ -687,20 +798,22 @@ export const GameHUD: React.FC<GameHUDProps> = ({
           </div>
 
           {/* Single flat control-hint line */}
-          <div className="text-center text-xs text-slate-300/90">
-            A/D Move · Space Jump (x2) · M1/J Combo · E/Q Execution (after 3-Hit) · Hold M1 Aether Wave · Hold M2 Aegis Nova · Shift Dash
+          <div className="shrink-0 text-center text-[10px] sm:text-xs text-slate-300/90">
+            {touchControlsEnabled
+              ? 'Joystick Move · ATK Combo (Hold Wave) · Jump (x2) · Parry (Hold Nova) · Wave & Nova Quick Magic · EXEC after 3-Hit'
+              : 'A/D Move · Space Jump (x2) · M1/J Combo · E/Q Execution (after 3-Hit) · Hold M1/M2 Spells · Shift Dash'}
           </div>
         </div>
       )}
 
       {/* PAUSE MODAL */}
       {hud.phase === 'paused' && (
-        <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/68 p-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#0b101b] p-6 text-center shadow-2xl">
-            <h2 className="font-display mb-1 text-2xl font-bold tracking-wide text-white">
+        <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/68 p-3 sm:p-4">
+          <div className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-xl border border-white/15 bg-[#0b101b] p-4 sm:p-6 text-center shadow-2xl">
+            <h2 className="font-display mb-1 text-xl sm:text-2xl font-bold tracking-wide text-white">
               Paused
             </h2>
-            <p className="mb-4 text-xs text-slate-400">
+            <p className="mb-3 sm:mb-4 text-xs text-slate-400">
               {palette.name} · Zone {hud.zone} of 4
             </p>
 
@@ -839,8 +952,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
                 : 'border-white/20 bg-white/5';
 
         return (
-          <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-[#060910]/66 p-4">
-            <div className="w-full max-w-2xl rounded-xl border border-amber-300/22 bg-[#0b101b]/95 p-7 text-center shadow-2xl">
+          <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-[#060910]/66 p-3 sm:p-4">
+            <div className="max-h-[92dvh] w-full max-w-2xl overflow-y-auto rounded-xl border border-amber-300/22 bg-[#0b101b]/95 p-4 sm:p-7 text-center shadow-2xl">
               {/* Stylized 'Stage Cleared' Banner Crest */}
               <div className="mb-1 text-xs font-medium text-amber-300/90">
                 Area {currentBiomeIdx + 1} of {BIOME_ORDER.length} · {palette.name}
@@ -1055,8 +1168,8 @@ export const GameHUD: React.FC<GameHUDProps> = ({
 
       {/* GAME OVER MODAL */}
       {hud.phase === 'gameover' && (
-        <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/72 p-4">
-          <div className="w-full max-w-md rounded-xl border border-white/15 bg-[#0b101b] p-7 text-center shadow-2xl">
+        <div className="pointer-events-auto fixed inset-0 flex items-center justify-center bg-black/72 p-3 sm:p-4">
+          <div className="max-h-[92dvh] w-full max-w-md overflow-y-auto rounded-xl border border-white/15 bg-[#0b101b] p-5 sm:p-7 text-center shadow-2xl">
             <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white/5 ring-1 ring-white/15">
               <Skull className="h-6 w-6 text-rose-400" />
             </div>

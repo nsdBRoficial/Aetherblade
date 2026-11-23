@@ -531,18 +531,23 @@ export class PostProcessingPass {
 
   public mode: ShaderStyleMode = 'hd2d';
   private flashAmount = 0;
+  private isMobile = false;
 
   constructor(
     renderer: THREE.WebGLRenderer,
     width: number,
     height: number,
     initialBiome: BiomeId,
+    isMobile = false,
   ) {
+    this.isMobile = isMobile;
     const pixelRatio = renderer.getPixelRatio();
-    const rtW = Math.max(1, Math.floor(width * pixelRatio));
-    const rtH = Math.max(1, Math.floor(height * pixelRatio));
-    const bloomW = Math.max(2, rtW >> 2);
-    const bloomH = Math.max(2, rtH >> 2);
+    const rtScale = isMobile ? Math.min(pixelRatio, 1.25) : pixelRatio;
+    const rtW = Math.max(1, Math.floor(width * rtScale));
+    const rtH = Math.max(1, Math.floor(height * rtScale));
+    const bloomShift = isMobile ? 3 : 2;
+    const bloomW = Math.max(2, rtW >> bloomShift);
+    const bloomH = Math.max(2, rtH >> bloomShift);
     this.bloomTexel.set(1 / bloomW, 1 / bloomH);
 
     const isWebGL2 = renderer.capabilities.isWebGL2;
@@ -785,10 +790,12 @@ export class PostProcessingPass {
   }
 
   public resize(width: number, height: number, pixelRatio: number): void {
-    const rtW = Math.max(1, Math.floor(width * pixelRatio));
-    const rtH = Math.max(1, Math.floor(height * pixelRatio));
-    const bloomW = Math.max(2, rtW >> 2);
-    const bloomH = Math.max(2, rtH >> 2);
+    const rtScale = this.isMobile ? Math.min(pixelRatio, 1.25) : pixelRatio;
+    const rtW = Math.max(1, Math.floor(width * rtScale));
+    const rtH = Math.max(1, Math.floor(height * rtScale));
+    const bloomShift = this.isMobile ? 3 : 2;
+    const bloomW = Math.max(2, rtW >> bloomShift);
+    const bloomH = Math.max(2, rtH >> bloomShift);
 
     this.renderTarget.setSize(rtW, rtH);
     this.bloomRT_A.setSize(bloomW, bloomH);
@@ -828,27 +835,30 @@ export class PostProcessingPass {
     // Pass 3 & 4: Dual-radius Separable 9-Tap Gaussian Blur (tight luminous core + lush outer halo)
     const dir = this.blurMat.uniforms.uDirection.value as THREE.Vector2;
 
-    // Tight blur pass (spread = 1.0)
+    // Tight blur pass (spread = 1.1 on desktop, 1.55 single-pass on mobile to halve GPU fill-rate)
+    const spread1 = this.isMobile ? 1.55 : 1.1;
     this.blurMat.uniforms.tInput.value = this.bloomRT_A.texture;
-    dir.set(this.bloomTexel.x * 1.1, 0);
+    dir.set(this.bloomTexel.x * spread1, 0);
     renderer.setRenderTarget(this.bloomRT_B);
     renderer.render(this.blurScene, this.postCamera);
 
     this.blurMat.uniforms.tInput.value = this.bloomRT_B.texture;
-    dir.set(0, this.bloomTexel.y * 1.1);
+    dir.set(0, this.bloomTexel.y * spread1);
     renderer.setRenderTarget(this.bloomRT_A);
     renderer.render(this.blurScene, this.postCamera);
 
-    // Wide halo pass (spread = 2.15)
-    this.blurMat.uniforms.tInput.value = this.bloomRT_A.texture;
-    dir.set(this.bloomTexel.x * 2.15, 0);
-    renderer.setRenderTarget(this.bloomRT_B);
-    renderer.render(this.blurScene, this.postCamera);
+    if (!this.isMobile) {
+      // Wide halo pass (desktop dual-radius bloom)
+      this.blurMat.uniforms.tInput.value = this.bloomRT_A.texture;
+      dir.set(this.bloomTexel.x * 2.15, 0);
+      renderer.setRenderTarget(this.bloomRT_B);
+      renderer.render(this.blurScene, this.postCamera);
 
-    this.blurMat.uniforms.tInput.value = this.bloomRT_B.texture;
-    dir.set(0, this.bloomTexel.y * 2.15);
-    renderer.setRenderTarget(this.bloomRT_A);
-    renderer.render(this.blurScene, this.postCamera);
+      this.blurMat.uniforms.tInput.value = this.bloomRT_B.texture;
+      dir.set(0, this.bloomTexel.y * 2.15);
+      renderer.setRenderTarget(this.bloomRT_A);
+      renderer.render(this.blurScene, this.postCamera);
+    }
 
     // Pass 5: Final Unified Hero-Style Composite with Bloom, Bayer Dither, 16-Color Palette & Espresso Ink Outlines
     this.material.uniforms.tBloom.value = this.bloomRT_A.texture;
